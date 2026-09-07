@@ -19,8 +19,14 @@ dev = ["pytest>=8.0", "black>=24.0"]
 [project.scripts]
 aethercod = "aethercod.__main__:main"
 
+[project.gui-scripts]
+aethercod-gui = "aethercod.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+aethercod = ["resources/*.svg", "resources/*.ico", "resources/*.png"]
 
 [tool.black]
 line-length = 100
