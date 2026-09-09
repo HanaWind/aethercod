@@ -17,10 +17,15 @@ class TimelineEntry(QGraphicsObject):
         self.height = 54.0
         self.setPos(x, y)
         self.color = QColor(color)
+        precision = str(entry.get("precision") or "")
+        date_text = str(entry.get("year") if entry.get("year") is not None else "未知年份")
+        if entry.get("end_year") is not None:
+            date_text += f" – {entry['end_year']}"
         self.setToolTip(
-            f"{entry.get('name', '')}\n{entry.get('label', entry.get('date_kind', ''))}"
+            f"{entry.get('name', '')}\n{entry.get('label', entry.get('date_kind', ''))}\n{date_text} {precision}"
         )
         self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.LeftButton)
         self.hovered = False
 
     def boundingRect(self) -> QRectF:
@@ -52,9 +57,12 @@ class TimelineEntry(QGraphicsObject):
         self.update()
         super().hoverLeaveEvent(event)
 
+    def mousePressEvent(self, event):
+        event.accept()
+
     def mouseDoubleClickEvent(self, event):
         self.activated.emit(str(self.entry.get("entity_id", "")))
-        super().mouseDoubleClickEvent(event)
+        event.accept()
 
 
 class TimelineView(QGraphicsView):
@@ -68,17 +76,35 @@ class TimelineView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setBackgroundBrush(QColor("#101828"))
         self._entries: list[dict[str, Any]] = []
+        self._empty_message = None
 
     def set_entries(self, entries: list[dict[str, Any]]) -> None:
-        self._entries = entries
+        self._entries = list(entries)
         self.timeline_scene.clear()
-        if not entries:
+        positioned = []
+        for entry in self._entries:
+            try:
+                if entry.get("year") is not None:
+                    entry = dict(entry)
+                    entry["year"] = int(entry["year"])
+                    if entry.get("end_year") is not None:
+                        entry["end_year"] = int(entry["end_year"])
+                    positioned.append(entry)
+            except (TypeError, ValueError):
+                continue
+        if not positioned:
             self.timeline_scene.setSceneRect(0, 0, 900, 300)
+            message = self.timeline_scene.addText(
+                "暂无可定位年份的日期\n请先选择年份或调整筛选条件。", QFont("Segoe UI", 14)
+            )
+            message.setDefaultTextColor(QColor("#98a2b3"))
+            message.setPos(260, 125)
             return
-        years = [int(entry["year"]) for entry in entries if entry.get("year") is not None]
-        if not years:
-            return
-        start, end = min(years), max(years)
+        years = [int(entry["year"]) for entry in positioned]
+        end_years = [
+            int(entry["end_year"]) for entry in positioned if entry.get("end_year") is not None
+        ]
+        start, end = min(years), max(years + end_years)
         span = max(1, end - start)
         scale = max(1.0, min(12.0, 1200.0 / span))
         left = 80.0
@@ -94,7 +120,7 @@ class TimelineView(QGraphicsView):
             text.setDefaultTextColor(QColor("#d0d5dd"))
             text.setPos(x - 18, axis_y + 12)
         occupied: dict[int, int] = {}
-        for entry in sorted(entries, key=lambda item: (item.get("year", 0), item.get("name", ""))):
+        for entry in sorted(positioned, key=lambda item: (int(item["year"]), item.get("name", ""))):
             year = int(entry["year"])
             lane = occupied.get(year, 0)
             occupied[year] = lane + 1

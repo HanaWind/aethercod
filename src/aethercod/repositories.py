@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any, Iterable
 
+from .db import is_builtin_field
 from .models import (
     AliasRedirect,
     CustomFieldDefinition,
@@ -15,10 +16,25 @@ from .models import (
     new_uuid,
     normalize_text,
     normalize_uuid,
+    normalize_precision,
     stable_date_id,
     utc_now,
     validate_date_parts,
 )
+
+
+@contextmanager
+def atomic(conn: sqlite3.Connection):
+    """Own only this unit of work, preserving any caller-owned transaction."""
+    name = "aethercod_" + new_uuid()
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+        raise
 
 
 # Kept as the historical public helper; all name/tag/alias comparisons use it.
@@ -294,9 +310,14 @@ class FieldDefinitionRepository:
 
     def delete(self, field_id: str) -> None:
         field_id = normalize_uuid(field_id)
-        self.conn.execute("DELETE FROM entity_field_values WHERE field_id=?", (field_id,))
-        self.conn.execute("DELETE FROM entity_type_fields WHERE id=?", (field_id,))
-        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT type_id,name FROM entity_type_fields WHERE id=?", (field_id,)
+        ).fetchone()
+        if row and is_builtin_field(field_id, row["type_id"], row["name"]):
+            raise ValueError("Built-in fields cannot be deleted")
+        with self.conn:
+            self.conn.execute("DELETE FROM entity_field_values WHERE field_id=?", (field_id,))
+            self.conn.execute("DELETE FROM entity_type_fields WHERE id=?", (field_id,))
 
     delete_field = delete
 
@@ -341,9 +362,8 @@ class FieldDefinitionRepository:
         if field_type not in FIELD_TYPES:
             raise ValueError(f"Unsupported field type: {field_type}")
 
-    @classmethod
     def _validate_value_type(
-        cls, field_type: str, value: Any, options: list[str], allow_none: bool = False
+        self, field_type: str, value: Any, options: list[str], allow_none: bool = False
     ) -> None:
         if value is None and allow_none:
             return
@@ -351,6 +371,8 @@ class FieldDefinitionRepository:
             value, str
         ):
             raise ValueError(f"Expected string value for {field_type}")
+        if field_type == "date" and value:
+            validate_date_parts(None, value)
         if field_type in {"integer", "int"} and (
             isinstance(value, bool) or not isinstance(value, int)
         ):
@@ -366,6 +388,23 @@ class FieldDefinitionRepository:
         if field_type == "multiselect":
             if not isinstance(value, list) or any(item not in options for item in value):
                 raise ValueError("Expected a list of configured choices")
+        if field_type in {
+            "entity",
+            "entity_ref",
+            "entity_reference",
+            "entity_refs",
+            "entity_list",
+            "multi_entity",
+        }:
+            refs = (
+                value if field_type in {"entity_refs", "entity_list", "multi_entity"} else [value]
+            )
+            if not isinstance(refs, list) or any(not isinstance(item, str) for item in refs):
+                raise ValueError("Entity reference value must contain entity IDs")
+            for ref in refs:
+                ref_id = normalize_uuid(ref)
+                if not self.conn.execute("SELECT 1 FROM entities WHERE id=?", (ref_id,)).fetchone():
+                    raise ValueError(f"Unknown entity reference: {ref}")
         if field_type == "json":
             try:
                 json.dumps(value, ensure_ascii=False)
@@ -382,7 +421,7 @@ class AliasRepository:
         self.conn = conn
 
     def add_redirect(
-        self, alias: str, entity_id: str, created_at: str | None = None
+        self, alias: str, entity_id: str, created_at: str | None = None, *, commit: bool = True
     ) -> AliasRedirect:
         alias = str(alias).strip()
         if not alias:
@@ -391,13 +430,29 @@ class AliasRepository:
         if not self.conn.execute("SELECT 1 FROM entities WHERE id=?", (entity_id,)).fetchone():
             raise ValueError(f"Unknown entity: {entity_id}")
         redirect = AliasRedirect(alias, normalize(alias), entity_id, created_at or utc_now())
-        self.conn.execute(
-            "INSERT INTO alias_redirects(alias,normalized,entity_id,created_at) VALUES(?,?,?,?) "
-            "ON CONFLICT(alias) DO UPDATE SET normalized=excluded.normalized,entity_id=excluded.entity_id",
-            (redirect.alias, redirect.normalized, redirect.entity_id, redirect.created_at),
-        )
-        self.conn.commit()
+        with atomic(self.conn) if commit else nullcontext():
+            self.check_available(alias, entity_id)
+            existing = self.conn.execute(
+                "SELECT * FROM alias_redirects WHERE normalized=?", (redirect.normalized,)
+            ).fetchone()
+            if existing:
+                return AliasRedirect(
+                    existing["alias"], existing["normalized"], entity_id, existing["created_at"]
+                )
+            self.conn.execute(
+                "INSERT INTO alias_redirects(alias,normalized,entity_id,created_at) VALUES(?,?,?,?)",
+                (redirect.alias, redirect.normalized, redirect.entity_id, redirect.created_at),
+            )
         return redirect
+
+    def check_available(self, alias: str, entity_id: str) -> None:
+        normalized = normalize(alias)
+        for table in ("alias_redirects", "entity_aliases"):
+            if self.conn.execute(
+                f"SELECT 1 FROM {table} WHERE normalized=? AND entity_id<>?",
+                (normalized, entity_id),
+            ).fetchone():
+                raise ValueError(f"Alias already points to another entity: {alias}")
 
     create = add_redirect
     set_redirect = add_redirect
@@ -529,7 +584,9 @@ class EntityRepository:
         target_id = self.aliases.resolve(value)
         return self.get(target_id, include_deleted=include_deleted) if target_id else None
 
-    def save(self, entity: Entity, *, commit: bool = True) -> Entity:
+    def save(
+        self, entity: Entity, *, commit: bool = True, preserve_timestamps: bool = False
+    ) -> Entity:
         # Normalize IDs at the persistence boundary, including entities created
         # by older callers that bypass the dataclass constructor.
         entity.id = normalize_uuid(entity.id) if entity.id else new_uuid()
@@ -540,11 +597,10 @@ class EntityRepository:
             raise ValueError(f"Unknown entity type: {entity.type_id}")
         if not str(entity.name).strip():
             raise ValueError("Entity name is required")
-        self.fields.validate_values(entity.type_id, entity.custom_fields, allow_unknown=True)
         now = utc_now()
-        entity.updated_at = now
+        entity.updated_at = (entity.updated_at or now) if preserve_timestamps else now
         entity.created_at = entity.created_at or now
-        with self.conn if commit else nullcontext():
+        with atomic(self.conn) if commit else nullcontext():
             self.conn.execute(
                 """INSERT INTO entities(id,type_id,name,summary,notes,color,remarks,created_at,updated_at,deleted_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -563,22 +619,33 @@ class EntityRepository:
                     entity.deleted_at,
                 ),
             )
+            self.fields.validate_values(entity.type_id, entity.custom_fields, allow_unknown=True)
             self.conn.execute("DELETE FROM entity_aliases WHERE entity_id=?", (entity.id,))
-            self.conn.executemany(
-                "INSERT INTO entity_aliases(entity_id,alias,normalized) VALUES(?,?,?)",
-                [
-                    (entity.id, a, normalize(a))
-                    for a in dict.fromkeys(entity.aliases)
-                    if str(a).strip()
-                ],
-            )
-            self.conn.execute("DELETE FROM entity_tags WHERE entity_id=?", (entity.id,))
-            for tag in dict.fromkeys(t.strip() for t in entity.tags if str(t).strip()):
+            seen_aliases: set[str] = set()
+            for raw_alias in entity.aliases:
+                alias = str(raw_alias).strip()
+                normalized_alias = normalize(alias)
+                if not normalized_alias or normalized_alias in seen_aliases:
+                    continue
+                self.aliases.check_available(alias, entity.id)
+                seen_aliases.add(normalized_alias)
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO tags(name,normalized) VALUES(?,?)", (tag, normalize(tag))
+                    "INSERT INTO entity_aliases(entity_id,alias,normalized) VALUES(?,?,?)",
+                    (entity.id, alias, normalized_alias),
+                )
+            self.conn.execute("DELETE FROM entity_tags WHERE entity_id=?", (entity.id,))
+            seen_tags: set[str] = set()
+            for raw_tag in entity.tags:
+                tag = str(raw_tag).strip()
+                normalized_tag = normalize(tag)
+                if not normalized_tag or normalized_tag in seen_tags:
+                    continue
+                seen_tags.add(normalized_tag)
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO tags(name,normalized) VALUES(?,?)", (tag, normalized_tag)
                 )
                 tag_id = self.conn.execute(
-                    "SELECT id FROM tags WHERE normalized=?", (normalize(tag),)
+                    "SELECT id FROM tags WHERE normalized=?", (normalized_tag,)
                 ).fetchone()[0]
                 self.conn.execute(
                     "INSERT INTO entity_tags(entity_id,tag_id) VALUES(?,?)", (entity.id, tag_id)
@@ -625,6 +692,7 @@ class EntityRepository:
                     if data.get("year") is not None and not data.get("date_value")
                     else "exact"
                 )
+                precision = normalize_precision(precision)
                 validate_date_parts(
                     data.get("year"),
                     data.get("date_value"),

@@ -49,7 +49,7 @@ def test_json_full_and_single_entity_import(project, tmp_path):
     type_id = service.taxonomy.list_types()[0].id
     entity = make_entity(service, type_id, "星门", notes="连接 [[missing-id]]")
     full = export_library(conn)
-    assert full["format_version"] == 1 and len(full["entities"]) == 1
+    assert full["format_version"] == 2 and len(full["entities"]) == 1
     single = export_entity(conn, entity.id)
     other_conn = __import__("aethercod.db", fromlist=["connect"]).connect(
         tmp_path / "other.aethercod"

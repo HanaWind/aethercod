@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+
+from .animated import AnimatedDialog
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 
-class TypeManagerDialog(QDialog):
+class TypeManagerDialog(AnimatedDialog):
     """Manage custom entity types and their typed property definitions."""
 
     def __init__(self, taxonomy, parent=None):
@@ -160,7 +162,7 @@ class TypeManagerDialog(QDialog):
             self._load_fields()
 
 
-class FieldDialog(QDialog):
+class FieldDialog(AnimatedDialog):
     TYPES = [
         ("单行文本", "text"),
         ("多行文本", "textarea"),

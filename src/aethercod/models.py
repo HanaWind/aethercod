@@ -142,9 +142,7 @@ class AliasRedirect:
     created_at: str = ""
 
     def __post_init__(self) -> None:
-        self.normalized = (
-            normalize_text(self.alias) if not self.normalized else normalize_text(self.normalized)
-        )
+        self.normalized = normalize_text(self.alias)
         self.entity_id = normalize_uuid(self.entity_id)
         self.created_at = self.created_at or utc_now()
 
@@ -224,23 +222,58 @@ def validate_date_parts(
     end_year: int | None = None,
     end_date_value: str | None = None,
 ) -> None:
-    """Validate partial dates and ranges used by timeline records."""
+    """Validate Gregorian partial dates, including signed fictional/BCE years.
+
+    ``exact`` retains the legacy year-only representation. Month/day precision
+    requires the corresponding components. Ranges compare known components.
+    """
     precision = normalize_precision(precision)
-    if year is not None and (not isinstance(year, int) or year < -999_999 or year > 999_999):
-        raise ValueError("Date year must be an integer between -999999 and 999999")
-    if end_year is not None and (
-        not isinstance(end_year, int) or end_year < -999_999 or end_year > 999_999
-    ):
-        raise ValueError("Date end_year must be an integer between -999999 and 999999")
-    if precision in {"year", "month", "day", "exact", "range"} and year is None and not date_value:
-        raise ValueError("A date requires year or date_value")
-    if precision == "range" and end_year is None and not end_date_value:
-        raise ValueError("A date range requires an end date")
-    if year is not None and end_year is not None and end_year < year:
-        raise ValueError("Date range end cannot precede its start")
-    for value in (date_value, end_date_value):
-        if value and (not isinstance(value, str) or len(value) > 64):
+
+    def parts(raw_year: int | None, value: str | None) -> tuple[int, ...] | None:
+        if raw_year is not None and (
+            type(raw_year) is not int or not -999_999 <= raw_year <= 999_999
+        ):
+            raise ValueError("Date year must be an integer between -999999 and 999999")
+        if value is None or value == "":
+            return (raw_year,) if raw_year is not None else None
+        if not isinstance(value, str) or len(value) > 64:
             raise ValueError("Date values must be strings of at most 64 characters")
+        match = re.fullmatch(r"([+-]?\d{1,6})(?:-(\d{2})(?:-(\d{2}))?)?", value)
+        if not match:
+            raise ValueError("Date must use YYYY, YYYY-MM or YYYY-MM-DD")
+        parsed = tuple(int(component) for component in match.groups() if component is not None)
+        parsed_year = parsed[0]
+        if not -999_999 <= parsed_year <= 999_999:
+            raise ValueError("Date year must be between -999999 and 999999")
+        if raw_year is not None and raw_year != parsed_year:
+            raise ValueError("Date year disagrees with date_value")
+        if len(parsed) >= 2:
+            month = parsed[1]
+            if not 1 <= month <= 12:
+                raise ValueError("Date month must be between 1 and 12")
+            if len(parsed) == 3:
+                leap = parsed_year % 4 == 0 and (parsed_year % 100 != 0 or parsed_year % 400 == 0)
+                days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                if not 1 <= parsed[2] <= days[month - 1]:
+                    raise ValueError("Invalid day for date month")
+        return parsed
+
+    start = parts(year, date_value)
+    end = parts(end_year, end_date_value)
+    if start is None:
+        raise ValueError("A date requires year or date_value")
+    if precision == "month" and len(start) != 2:
+        raise ValueError("Month precision requires YYYY-MM")
+    if precision == "day" and len(start) != 3:
+        raise ValueError("Day precision requires YYYY-MM-DD")
+    if precision == "year" and len(start) != 1:
+        raise ValueError("Year precision requires a year only")
+    if precision == "range" and end is None:
+        raise ValueError("A date range requires an end date")
+    if end is not None:
+        shared = min(len(start), len(end))
+        if end[:shared] < start[:shared]:
+            raise ValueError("Date range end cannot precede its start")
 
 
 @dataclass(slots=True)

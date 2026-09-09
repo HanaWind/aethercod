@@ -24,6 +24,7 @@ from .repositories import (
     RelationRepository,
     TaxonomyRepository,
     normalize,
+    atomic,
 )
 
 WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
@@ -323,7 +324,7 @@ class TimelineService:
 
 
 class ProjectService:
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection, *, writable: bool = True):
         self.conn = conn
         self.entities = EntityRepository(conn)
         self.relations = RelationRepository(conn)
@@ -337,8 +338,31 @@ class ProjectService:
         # callers that use the original repositories above.
         self.field_definitions = self.fields
         self.alias_redirects = self.aliases
+        self.writable = writable
+
+    def _ensure_writable(self) -> None:
+        if not self.writable:
+            raise PermissionError("Project is read-only")
+
+    def save_entity(self, entity: Entity, redirects: list[str] | None = None) -> Entity:
+        self._ensure_writable()
+        # None preserves redirects; [] clears them. Retained normalized aliases
+        # keep their original spelling and creation timestamp.
+        with atomic(self.conn):
+            saved = self.entities.save(entity, commit=False)
+            if redirects is not None:
+                wanted = {normalize(alias) for alias in redirects}
+                for current in self.aliases.list(saved.id):
+                    if current.normalized not in wanted:
+                        self.conn.execute(
+                            "DELETE FROM alias_redirects WHERE alias=?", (current.alias,)
+                        )
+                for alias in redirects:
+                    self.aliases.add_redirect(alias, saved.id, commit=False)
+            return saved
 
     def new_entity(self, type_id: str) -> Entity:
+        self._ensure_writable()
         if self.taxonomy.get(type_id) is None:
             raise ValueError(f"Unknown entity type: {type_id}")
         return Entity(id=new_uuid(), type_id=type_id, name="未命名词条")
@@ -346,6 +370,7 @@ class ProjectService:
     def new_relation(
         self, source_id: str, target_id: str, label: str, reverse_label: str = "", notes: str = ""
     ) -> Relation:
+        self._ensure_writable()
         return self.relations.create(source_id, target_id, label, reverse_label, notes)
 
     def relation_rows(self, entity_id: str) -> list[dict[str, Any]]:

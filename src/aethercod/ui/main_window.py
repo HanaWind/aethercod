@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -44,6 +44,7 @@ from ..exchange import (
 )
 from ..models import Entity
 from ..services import ProjectService
+from .animated import AnimatedDialog
 from .color_wheel import ColorWheel
 from .graph_view import GraphView
 from .specialized_forms import SpecializedForm
@@ -61,7 +62,7 @@ APP_ICON = Path(__file__).resolve().parent.parent / "resources" / "aethercod.svg
 WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
 
 
-class RelationDialog(QDialog):
+class RelationDialog(AnimatedDialog):
     def __init__(
         self,
         entities: list[Entity],
@@ -112,7 +113,7 @@ class RelationDialog(QDialog):
         super().accept()
 
 
-class ColorDialog(QDialog):
+class ColorDialog(AnimatedDialog):
     def __init__(self, color: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("选择词条颜色")
@@ -144,6 +145,9 @@ class MainWindow(QMainWindow):
         self.read_only = False
         self.dark = bool(self.settings.value("dark_theme", False, type=bool))
         self.current_color = "#7c3aed"
+        self._loading_entity = False
+        self.dirty = False
+        self._page_refreshing = False
         self._build_actions()
         self._build_ui()
         self._apply_theme()
@@ -155,7 +159,14 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         self.save_action = QAction("保存", self)
+        self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_entity)
+        self.search_action = QAction("快速搜索", self)
+        self.search_action.setShortcut(QKeySequence("Ctrl+P"))
+        self.search_action.triggered.connect(
+            lambda: (self.search.setFocus(), self.search.selectAll())
+        )
+        self.addAction(self.search_action)
         for text, slot in (("新建", self.new_project), ("打开", self.open_project)):
             action = QAction(text, self)
             action.triggered.connect(slot)
@@ -275,6 +286,7 @@ class MainWindow(QMainWindow):
         detail_layout.addLayout(meta)
         self.specialized = SpecializedForm()
         self.specialized.relation_requested.connect(self.add_specialized_relation)
+        self.specialized.changed.connect(self.mark_dirty)
         detail_layout.addWidget(self.specialized)
         self.notes_tabs = QTabWidget()
         self.notes_edit = QPlainTextEdit()
@@ -286,10 +298,20 @@ class MainWindow(QMainWindow):
         self.notes_tabs.addTab(self.notes_edit, "Markdown")
         self.notes_tabs.addTab(self.preview, "预览")
         self.notes_edit.textChanged.connect(self.update_preview)
+        self.notes_edit.textChanged.connect(self.mark_dirty)
+        for editor in (
+            self.name_edit,
+            self.summary_edit,
+            self.alias_edit,
+            self.redirect_edit,
+            self.tags_edit,
+        ):
+            editor.textChanged.connect(self.mark_dirty)
         detail_layout.addWidget(self.notes_tabs, 2)
         self.remarks_edit = QPlainTextEdit()
         self.remarks_edit.setPlaceholderText("自定义备注")
         self.remarks_edit.setMaximumHeight(70)
+        self.remarks_edit.textChanged.connect(self.mark_dirty)
         detail_layout.addWidget(self.remarks_edit)
         button_row = QHBoxLayout()
         self.save_button = QPushButton("保存词条")
@@ -363,6 +385,7 @@ class MainWindow(QMainWindow):
         self.timeline_kind_filter.addItem("事件结束", "event_end")
         self.timeline_kind_filter.addItem("建立", "founded")
         self.timeline_kind_filter.addItem("终结", "dissolved")
+        self.timeline_kind_filter.addItem("创造", "created")
         timeline_refresh = QPushButton("刷新")
         timeline_refresh.clicked.connect(self.show_timeline)
         timeline_controls.addWidget(self.timeline_type_filter)
@@ -512,12 +535,26 @@ class MainWindow(QMainWindow):
         if current:
             self.load_entity(current.data(Qt.UserRole))
 
+    def mark_dirty(self, *_args) -> None:
+        if self._loading_entity or not self.current_id or self.read_only:
+            return
+        if not self.dirty:
+            self.dirty = True
+            self.setWindowTitle("* Aethercod · 世界观资料库")
+
+    def clear_dirty(self) -> None:
+        self.dirty = False
+        self.setWindowTitle("Aethercod · 世界观资料库")
+
     def load_entity(self, entity_id: str):
+        self._loading_entity = True
         entity = self.service.entities.get(entity_id)
         if not entity:
+            self._loading_entity = False
             return
         self.current_id = entity.id
         self.current_color = entity.color
+        self._loading_entity = True
         self.name_edit.setText(entity.name)
         self.summary_edit.setText(entity.summary)
         self.alias_edit.setText(", ".join(entity.aliases))
@@ -547,6 +584,8 @@ class MainWindow(QMainWindow):
         self.update_preview()
         self.refresh_relations()
         self._apply_read_only()
+        self._loading_entity = False
+        self.clear_dirty()
 
     def editor_type_changed(self, _index):
         type_id = self.type_edit.currentData()
@@ -646,6 +685,7 @@ class MainWindow(QMainWindow):
             self.service.aliases.add_redirect(alias, entity.id)
         self.refresh_entities()
         self.load_entity(entity.id)
+        self.clear_dirty()
         self.statusBar().showMessage("词条已保存", 2500)
 
     def delete_entity(self):
@@ -824,12 +864,18 @@ class MainWindow(QMainWindow):
         apply_theme(self.app_instance(), self.dark)
 
     def page_changed(self, index):
+        if self._page_refreshing:
+            return
         if index == 1:
-            self.show_graph()
+            self.show_graph(select_page=False)
         elif index == 2:
-            self.show_timeline()
+            self.show_timeline(select_page=False)
 
-    def show_graph(self):
+    def show_graph(self, _checked=False, *, select_page=True):
+        if select_page:
+            self._page_refreshing = True
+            self.content_tabs.setCurrentIndex(1)
+            self._page_refreshing = False
         if not self.service:
             return
         types = {item.id: item for item in self.service.taxonomy.list_types()}
@@ -880,7 +926,8 @@ class MainWindow(QMainWindow):
             else []
         )
         self.graph_view.load_graph(nodes, edges)
-        self.content_tabs.setCurrentIndex(1)
+        if select_page:
+            self.content_tabs.setCurrentIndex(1)
 
     def graph_node_opened(self, entity_id: str):
         self.load_entity(entity_id)
@@ -898,7 +945,11 @@ class MainWindow(QMainWindow):
         self.load_entity(entity_id)
         self.content_tabs.setCurrentIndex(0)
 
-    def show_timeline(self):
+    def show_timeline(self, _checked=False, *, select_page=True):
+        if select_page:
+            self._page_refreshing = True
+            self.content_tabs.setCurrentIndex(2)
+            self._page_refreshing = False
         if not self.service:
             return
         entries = self.service.timeline.entries(
@@ -913,7 +964,8 @@ class MainWindow(QMainWindow):
                 types.get(entry["type_id"]).name if entry["type_id"] in types else ""
             )
         self.timeline_view.set_entries(entries)
-        self.content_tabs.setCurrentIndex(2)
+        if select_page:
+            self.content_tabs.setCurrentIndex(2)
 
     def show_type_manager(self):
         if self.service and not self.read_only:
@@ -924,7 +976,7 @@ class MainWindow(QMainWindow):
     def show_validation(self):
         if not self.service:
             return
-        dialog = ValidationDialog(self.service, self)
+        dialog = ValidationDialog(self.service, self, read_only=self.read_only)
         dialog.entity_requested.connect(self.load_entity)
         dialog.exec()
 
@@ -1038,6 +1090,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("项目已备份", 2500)
 
     def closeEvent(self, event):
+        if self.dirty and not self.read_only:
+            answer = QMessageBox.question(
+                self,
+                "未保存的修改",
+                "当前词条有未保存修改，是否保存？",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Save:
+                self.save_entity()
         if self.conn:
             self.conn.close()
         self.settings.setValue("window_geometry", self.saveGeometry())

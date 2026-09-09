@@ -8,12 +8,19 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import Entity, Relation, normalize_uuid, stable_date_id
-from .repositories import AliasRepository, EntityRepository, RelationRepository, TaxonomyRepository
+from .models import Entity, Relation, normalize_uuid, stable_date_id, utc_now
+from .repositories import (
+    AliasRepository,
+    EntityRepository,
+    FieldDefinitionRepository,
+    RelationRepository,
+    TaxonomyRepository,
+)
+from .db import is_builtin_field
 
-# v1 is retained as the default wire format so existing callers and files keep
-# working. v2 adds structured redirects, rich field definitions and type data.
-FORMAT_VERSION = 1
+# Default exports include redirects and rich definitions. Explicit v1 exports
+# remain available for legacy consumers.
+FORMAT_VERSION = 2
 LATEST_FORMAT_VERSION = 2
 SUPPORTED_FORMAT_VERSIONS = {1, 2}
 
@@ -229,7 +236,8 @@ def write_json(payload: dict[str, Any], path: str | Path) -> None:
 
 
 def read_json(path: str | Path) -> dict[str, Any]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    # utf-8-sig accepts both normal UTF-8 and files saved by Windows Notepad with a BOM.
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("不支持的 Aethercod JSON 格式版本")
     version = payload.get("format_version", 1)
@@ -422,14 +430,34 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
     try:
         for item in normalized_types:
             conn.execute(
-                "INSERT OR IGNORE INTO entity_types(id,name,icon,is_builtin) VALUES(?,?,?,?)",
+                "INSERT INTO entity_types(id,name,icon,is_builtin) VALUES(?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name,icon=excluded.icon",
                 (item["id"], item["name"], item["icon"], item["is_builtin"]),
+            )
+        # Stage entity identities before validating reference fields/defaults,
+        # allowing forward references, cycles and self-references in one import.
+        for entity in normalized_entities:
+            conn.execute(
+                "INSERT INTO entities(id,type_id,name,created_at,updated_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(id) DO NOTHING",
+                (
+                    entity.id,
+                    entity.type_id,
+                    entity.name,
+                    entity.created_at or utc_now(),
+                    entity.updated_at or utc_now(),
+                ),
             )
         # A single entity export always carries its type and fields. Full
         # exports carry all definitions. Insert definitions before entities so
         # typed validation can run in EntityRepository.save.
         taxonomy = TaxonomyRepository(conn)
+        fields_repo = FieldDefinitionRepository(conn)
         for item in normalized_fields:
+            fields_repo._validate_type(item["field_type"])
+            fields_repo._validate_value_type(
+                item["field_type"], item["default_value"], item["options"], allow_none=True
+            )
             if not conn.execute(
                 "SELECT 1 FROM entity_types WHERE id=?", (item["type_id"],)
             ).fetchone():
@@ -437,7 +465,21 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
             existing = conn.execute(
                 "SELECT id FROM entity_type_fields WHERE id=?", (item["id"],)
             ).fetchone()
+            same_name = conn.execute(
+                "SELECT id FROM entity_type_fields WHERE type_id=? AND name=? AND id<>?",
+                (item["type_id"], item["name"], item["id"]),
+            ).fetchone()
+            if same_name:
+                # Legacy built-in templates used random IDs. Reuse that field
+                # rather than deleting values or creating a duplicate definition.
+                if existing or not is_builtin_field(item["id"], item["type_id"], item["name"]):
+                    raise ValueError(f"Field already exists: {item['name']}")
+                item["id"] = same_name["id"]
+                existing = same_name
             if existing:
+                current = fields_repo.get(item["id"])
+                if current.type_id != item["type_id"]:
+                    raise ValueError("Cannot move an existing field to another entity type")
                 conn.execute(
                     "UPDATE entity_type_fields SET type_id=?,name=?,field_type=?,required=?,description=?,options_json=?,default_json=? WHERE id=?",
                     (
@@ -474,7 +516,10 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
             )
         entity_repo = EntityRepository(conn)
         for entity in normalized_entities:
-            entity_repo.save(entity, commit=False)
+            entity_repo.save(entity, commit=False, preserve_timestamps=True)
+            conn.execute(
+                "UPDATE entities SET created_at=? WHERE id=?", (entity.created_at, entity.id)
+            )
         relation_count = 0
         skipped_relations = 0
         for relation in normalized_relations:
@@ -502,22 +547,10 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
             )
             relation_count += 1
         for redirect in normalized_redirects:
-            if not conn.execute(
-                "SELECT 1 FROM entities WHERE id=?", (redirect["entity_id"],)
-            ).fetchone():
-                raise ValueError(f"Unknown alias redirect target: {redirect['entity_id']}")
-            conn.execute(
-                "INSERT INTO alias_redirects(alias,normalized,entity_id,created_at) VALUES(?,?,?,COALESCE(NULLIF(?,''),CURRENT_TIMESTAMP)) "
-                "ON CONFLICT(alias) DO UPDATE SET normalized=excluded.normalized,entity_id=excluded.entity_id",
-                (
-                    redirect["alias"],
-                    redirect["normalized"] or " ".join(redirect["alias"].casefold().split()),
-                    redirect["entity_id"],
-                    redirect["created_at"],
-                ),
+            AliasRepository(conn).add_redirect(
+                redirect["alias"], redirect["entity_id"], redirect["created_at"], commit=False
             )
         conn.execute("RELEASE SAVEPOINT aethercod_import")
-        conn.commit()
     except Exception:
         conn.execute("ROLLBACK TO SAVEPOINT aethercod_import")
         conn.execute("RELEASE SAVEPOINT aethercod_import")

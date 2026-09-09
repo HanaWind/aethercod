@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+
+from .animated import AnimatedDialog
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -14,12 +16,13 @@ from PySide6.QtWidgets import (
 )
 
 
-class ValidationDialog(QDialog):
+class ValidationDialog(AnimatedDialog):
     entity_requested = Signal(str)
 
-    def __init__(self, service, parent=None):
+    def __init__(self, service, parent=None, read_only: bool = False):
         super().__init__(parent)
         self.service = service
+        self.read_only = read_only
         self.setWindowTitle("数据校验")
         self.resize(680, 430)
         self.summary = QLabel()
@@ -58,7 +61,7 @@ class ValidationDialog(QDialog):
             self.list.addItem(item)
         has_issues = bool(issues)
         self.open_button.setEnabled(has_issues)
-        self.remove_relation_button.setEnabled(has_issues)
+        self.remove_relation_button.setEnabled(has_issues and not self.read_only)
 
     def _selected_issue(self):
         item = self.list.currentItem()

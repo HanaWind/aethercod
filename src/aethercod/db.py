@@ -175,42 +175,67 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    initialize(conn)
+    try:
+        initialize(conn)
+        conn.execute("PRAGMA journal_mode = WAL")
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
 def initialize(conn: sqlite3.Connection) -> None:
+    # Read the marker before running any DDL.  executescript() commits implicitly,
+    # so running it first could mutate a database we are about to reject.
+    marker_exists = _table_exists(conn, "schema_meta")
+    row = (
+        conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
+        if marker_exists
+        else None
+    )
     had_entities = _table_exists(conn, "entities")
-    conn.execute("BEGIN")
+    version = int(row[0]) if row and str(row[0]).isdigit() else (1 if had_entities else 0)
+    if version > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Database schema version {version} is newer than supported {SCHEMA_VERSION}"
+        )
+    conn.execute("SAVEPOINT aethercod_initialize")
     try:
-        conn.executescript(SCHEMA_SQL)
-        row = conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
-        version = int(row[0]) if row and str(row[0]).isdigit() else (1 if had_entities else 0)
-        if version > SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Database schema version {version} is newer than supported {SCHEMA_VERSION}"
-            )
+        # Execute statements individually: executescript() would commit the
+        # caller's transaction and make DDL impossible to roll back.
+        for statement in SCHEMA_SQL.split(";"):
+            if statement.strip():
+                conn.execute(statement)
         if version < 2:
             migrate_v1_to_v2(conn)
         conn.execute(
-            "INSERT INTO schema_meta(key, value) VALUES('version', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "INSERT INTO schema_meta(key,value) VALUES('version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),
         )
         conn.executemany(
-            "INSERT OR IGNORE INTO entity_types(id, name, icon, is_builtin) VALUES(?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO entity_types(id,name,icon,is_builtin) VALUES(?,?,?,?)",
             [item + (1,) for item in BUILTIN_TYPES],
         )
         _seed_builtin_fields(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO project_meta(key, value) VALUES('name', 'Untitled World')"
+            "INSERT OR IGNORE INTO project_meta(key,value) VALUES('name','Untitled World')"
         )
-        conn.execute("INSERT OR IGNORE INTO project_meta(key, value) VALUES('description', '')")
-        conn.commit()
+        conn.execute("INSERT OR IGNORE INTO project_meta(key,value) VALUES('description','')")
+        conn.execute("RELEASE SAVEPOINT aethercod_initialize")
     except Exception:
-        conn.rollback()
+        conn.execute("ROLLBACK TO SAVEPOINT aethercod_initialize")
+        conn.execute("RELEASE SAVEPOINT aethercod_initialize")
         raise
+
+
+def is_builtin_field(field_id: str, type_id: str, name: str) -> bool:
+    # Legacy templates used random IDs. Protect these by their template name,
+    # and protect stable IDs even when their display name has been edited.
+    return any(
+        name == definition[0]
+        or field_id == uuid.uuid5(BUILTIN_FIELD_NAMESPACE, f"{type_id}:{definition[0]}").hex
+        for definition in BUILTIN_FIELDS.get(type_id, [])
+    )
 
 
 def _seed_builtin_fields(conn: sqlite3.Connection) -> None:
@@ -218,6 +243,11 @@ def _seed_builtin_fields(conn: sqlite3.Connection) -> None:
     for type_id, definitions in BUILTIN_FIELDS.items():
         for name, field_type, required, options in definitions:
             field_id = uuid.uuid5(BUILTIN_FIELD_NAMESPACE, f"{type_id}:{name}").hex
+            if conn.execute(
+                "SELECT 1 FROM entity_type_fields WHERE type_id=? AND name=?",
+                (type_id, name),
+            ).fetchone():
+                continue
             conn.execute(
                 """INSERT OR IGNORE INTO entity_type_fields
                    (id, type_id, name, field_type, required, options_json)
