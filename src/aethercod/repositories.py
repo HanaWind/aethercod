@@ -92,6 +92,13 @@ class TaxonomyRepository:
             "INSERT INTO entity_types(id,name,icon,is_builtin) VALUES(?,?,?,0)",
             (type_id, name, icon or "✦"),
         )
+        # User-created types start with the same two broad fields as built-ins;
+        # they remain ordinary editable fields and can be removed later.
+        for field_name, field_type in (("定位/身份", "text"), ("核心特征", "textarea")):
+            self.conn.execute(
+                "INSERT INTO entity_type_fields(id,type_id,name,field_type) VALUES(?,?,?,?)",
+                (new_uuid(), type_id, field_name, field_type),
+            )
         self.conn.commit()
         return EntityType(type_id, name, icon or "✦", False)
 
@@ -775,6 +782,20 @@ class RelationRepository:
             raise ValueError(f"Unknown relation target entity: {target_id}")
         return source_id, target_id
 
+    def _check_duplicate(
+        self, source_id: str, target_id: str, label: str, exclude_id: str | None = None
+    ) -> None:
+        normalized_label = normalize_text(label)
+        rows = self.conn.execute(
+            "SELECT id,label FROM relations WHERE source_id=? AND target_id=?",
+            (source_id, target_id),
+        ).fetchall()
+        if any(
+            row["id"] != exclude_id and normalize_text(row["label"]) == normalized_label
+            for row in rows
+        ):
+            raise ValueError("相同方向和名称的关系已经存在")
+
     def get(self, relation_id: str) -> Relation | None:
         row = self.conn.execute(
             "SELECT * FROM relations WHERE id=?", (normalize_uuid(relation_id),)
@@ -791,8 +812,10 @@ class RelationRepository:
         id: str | None = None,
     ) -> Relation:
         source_id, target_id = self._check_endpoints(source_id, target_id)
-        if not str(label).strip():
+        label = str(label).strip()
+        if not label:
             raise ValueError("Relation label is required")
+        self._check_duplicate(source_id, target_id, label)
         relation = Relation(
             id or new_uuid(), source_id, target_id, label, reverse_label, notes, utc_now()
         )
@@ -828,8 +851,10 @@ class RelationRepository:
             source_id or current.source_id, target_id or current.target_id
         )
         new_label = label if label is not None else current.label
+        new_label = str(new_label).strip()
         if not str(new_label).strip():
             raise ValueError("Relation label is required")
+        self._check_duplicate(source, target, new_label, current.id)
         values = (
             source,
             target,

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from .date_selector import WorldDateSelector
 
 # Relation presets turn specialized concepts into ordinary Entity + Relation links.
+COMMON_RELATIONS = [("通用关联", None, "相关", "相关")]
 RELATION_PRESETS = {
     "person": [
         ("出生地", "place", "出生于", "是出生地"),
@@ -172,6 +173,8 @@ class SpecializedForm(QWidget):
             definition = dict(definition)
             definition["key"] = key
             widget = self._make_widget(definition)
+            if definition.get("description"):
+                widget.setToolTip(str(definition["description"]))
             self.fields[key] = widget
             self._definitions[key] = definition
             label = str(definition.get("name", key))
@@ -182,7 +185,8 @@ class SpecializedForm(QWidget):
 
         self._set_dates([])
 
-        for label, target_type, relation, reverse in RELATION_PRESETS.get(type_id, []):
+        presets = COMMON_RELATIONS + RELATION_PRESETS.get(type_id, [])
+        for label, target_type, relation, reverse in presets:
             button = QPushButton(f"＋ 添加{label}")
             button.setProperty("class", "secondary")
             button.clicked.connect(
@@ -192,7 +196,14 @@ class SpecializedForm(QWidget):
             )
             self.relations.addWidget(button)
         self._loading = False
-        self.setVisible(bool(self.fields or self.date_entries or RELATION_PRESETS.get(type_id)))
+        self.setVisible(
+            bool(
+                self.fields
+                or self.date_entries
+                or COMMON_RELATIONS
+                or RELATION_PRESETS.get(type_id)
+            )
+        )
 
     def _emit_changed(self, *args) -> None:
         if not self._loading:
@@ -398,7 +409,12 @@ class SpecializedForm(QWidget):
             }
             self._set_dates(dates)
             self.setVisible(
-                bool(self.fields or self.date_entries or RELATION_PRESETS.get(self.type_id))
+                bool(
+                    self.fields
+                    or self.date_entries
+                    or COMMON_RELATIONS
+                    or RELATION_PRESETS.get(self.type_id)
+                )
             )
         finally:
             self._loading = False

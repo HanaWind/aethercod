@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import Entity, Relation, normalize_uuid, stable_date_id, utc_now
+from .models import Entity, Relation, normalize_text, normalize_uuid, stable_date_id, utc_now
 from .repositories import (
     AliasRepository,
     EntityRepository,
@@ -421,6 +421,16 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
     normalized_fields = [_field_from_dict(item) for item in field_items]
     normalized_entities = [_entity_from_dict(item) for item in entity_items]
     normalized_relations = [_relation_from_dict(item) for item in payload.get("relations", [])]
+    relation_keys: set[tuple[str, str, str]] = set()
+    for relation in normalized_relations:
+        key = (
+            relation["source_id"],
+            relation["target_id"],
+            normalize_text(relation["label"]),
+        )
+        if key in relation_keys:
+            raise ValueError("导入数据包含重复的同向关系")
+        relation_keys.add(key)
     normalized_redirects = [
         _redirect_from_dict(item) for item in payload.get("alias_redirects", [])
     ]
@@ -533,6 +543,16 @@ def import_library(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[st
             ):
                 skipped_relations += 1
                 continue
+            duplicate = conn.execute(
+                "SELECT id,label FROM relations WHERE source_id=? AND target_id=?",
+                (relation["source_id"], relation["target_id"]),
+            ).fetchone()
+            if (
+                duplicate
+                and duplicate["id"] != relation["id"]
+                and normalize_text(duplicate["label"]) == normalize_text(relation["label"])
+            ):
+                raise ValueError("导入数据会产生重复的同向关系")
             conn.execute(
                 "INSERT OR REPLACE INTO relations(id,source_id,target_id,label,reverse_label,notes,created_at) VALUES(?,?,?,?,?,?,?)",
                 (

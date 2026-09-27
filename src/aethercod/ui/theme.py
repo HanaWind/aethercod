@@ -3,29 +3,32 @@ from __future__ import annotations
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
-ACCENT = "#7c3aed"
-ACCENT_HOVER = "#6d28d9"
+ACCENT = "#0f766e"
+ACCENT_HOVER = "#115e59"
+ACCENT_PRESSED = "#134e4a"
 
 
 def apply_theme(app: QApplication, dark: bool) -> None:
     palette = QPalette()
     if dark:
         colors = {
-            "window": "#0b1020",
-            "panel": "#121a2b",
-            "alternate": "#182236",
-            "text": "#f2f4f7",
-            "muted": "#98a2b3",
-            "border": "#344054",
+            "window": "#111827",
+            "panel": "#1f2937",
+            "alternate": "#273449",
+            "text": "#f9fafb",
+            "muted": "#a8b3c2",
+            "border": "#3b4758",
+            "input": "#182333",
         }
     else:
         colors = {
-            "window": "#f4f6fb",
+            "window": "#f6f8fa",
             "panel": "#ffffff",
-            "alternate": "#eef2f8",
-            "text": "#101828",
-            "muted": "#667085",
-            "border": "#d0d5dd",
+            "alternate": "#edf2f3",
+            "text": "#17212b",
+            "muted": "#64748b",
+            "border": "#d5dde3",
+            "input": "#ffffff",
         }
     palette.setColor(QPalette.Window, QColor(colors["window"]))
     palette.setColor(QPalette.WindowText, QColor(colors["text"]))
@@ -41,28 +44,39 @@ def apply_theme(app: QApplication, dark: bool) -> None:
     app.setStyleSheet(f"""
         * {{ font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 13px; }}
         QMainWindow {{ background: {colors['window']}; }}
-        QToolBar {{ background: {colors['panel']}; padding: 9px; spacing: 5px; border: none; border-bottom: 1px solid {colors['border']}; }}
-        QToolButton {{ padding: 7px 10px; border-radius: 9px; color: {colors['text']}; }}
-        QToolButton:hover {{ background: {colors['alternate']}; }}
-        QGroupBox {{ font-weight: 600; border: 1px solid {colors['border']}; border-radius: 14px; margin-top: 12px; padding: 14px 10px 10px 10px; background: {colors['panel']}; }}
-        QGroupBox::title {{ subcontrol-origin: margin; left: 14px; padding: 0 6px; color: {colors['text']}; }}
+        QToolBar {{ background: {colors['panel']}; padding: 6px; spacing: 4px; border: none; border-bottom: 1px solid {colors['border']}; }}
+        QToolButton {{ padding: 6px 9px; border-radius: 4px; color: {colors['text']}; border: 1px solid transparent; }}
+        QToolButton:hover {{ background: {colors['alternate']}; border-color: {colors['border']}; }}
+        QToolButton:pressed {{ background: {ACCENT_PRESSED}; color: #ffffff; }}
+        QToolButton:checked {{ background: {ACCENT}; color: #ffffff; }}
+        QGroupBox {{ font-weight: 600; border: 1px solid {colors['border']}; border-radius: 6px; margin-top: 10px; padding: 12px 9px 9px 9px; background: {colors['panel']}; }}
+        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {colors['text']}; }}
         QListWidget, QTreeWidget, QTableWidget, QPlainTextEdit, QTextBrowser,
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
-            background: {colors['panel']}; color: {colors['text']}; border: 1px solid {colors['border']};
-            border-radius: 10px; padding: 7px; selection-background-color: {ACCENT};
+            background: {colors['input']}; color: {colors['text']}; border: 1px solid {colors['border']};
+            border-radius: 4px; padding: 6px; selection-background-color: {ACCENT};
         }}
-        QListWidget::item {{ padding: 9px 8px; margin: 2px; border-radius: 8px; }}
+        QListWidget::item {{ padding: 8px 7px; margin: 1px; border-radius: 3px; }}
         QListWidget::item:hover {{ background: {colors['alternate']}; }}
         QListWidget::item:selected {{ background: {ACCENT}; color: white; }}
-        QTabWidget::pane {{ border: 1px solid {colors['border']}; border-radius: 12px; background: {colors['panel']}; }}
-        QTabBar::tab {{ padding: 9px 18px; margin-right: 3px; border-radius: 9px; background: {colors['alternate']}; }}
+        QTabWidget::pane {{ border: 1px solid {colors['border']}; border-radius: 5px; background: {colors['panel']}; }}
+        QTabBar::tab {{ padding: 8px 16px; margin-right: 2px; border-radius: 4px; background: {colors['alternate']}; color: {colors['muted']}; }}
         QTabBar::tab:selected {{ background: {ACCENT}; color: white; }}
-        QPushButton {{ background: {ACCENT}; color: white; padding: 8px 14px; border: none; border-radius: 10px; font-weight: 600; }}
+        QPushButton, QDialogButtonBox QPushButton {{ background: {ACCENT}; color: white; padding: 7px 12px; border: 1px solid {ACCENT}; border-radius: 4px; font-weight: 600; }}
         QPushButton:hover {{ background: {ACCENT_HOVER}; }}
+        QPushButton:pressed, QDialogButtonBox QPushButton:pressed {{ background: {ACCENT_PRESSED}; border-color: {ACCENT_PRESSED}; }}
+        QPushButton[class="secondary"] {{ background: {colors['alternate']}; color: {colors['text']}; border-color: {colors['border']}; }}
+        QPushButton[class="secondary"]:hover {{ background: {colors['border']}; }}
+        QPushButton[class="secondary"]:pressed {{ background: {colors['border']}; }}
+        QPushButton[class="danger"] {{ background: #b42318; border-color: #b42318; }}
+        QPushButton[class="danger"]:hover {{ background: #912018; border-color: #912018; }}
+        QPushButton[class="danger"]:pressed {{ background: #7a271a; border-color: #7a271a; }}
+        QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus {{ border: 1px solid {ACCENT}; }}
         QPushButton:disabled {{ background: {colors['alternate']}; color: {colors['muted']}; }}
-        QSplitter::handle {{ background: {colors['border']}; width: 1px; }}
+        QDialogButtonBox QPushButton {{ min-width: 78px; }}
+        QSplitter::handle {{ background: {colors['border']}; width: 2px; }}
         QStatusBar {{ background: {colors['panel']}; border-top: 1px solid {colors['border']}; color: {colors['muted']}; }}
         QLabel {{ color: {colors['text']}; }}
         QScrollBar:vertical {{ background: transparent; width: 10px; }}
-        QScrollBar::handle:vertical {{ background: {colors['border']}; border-radius: 5px; min-height: 30px; }}
+        QScrollBar::handle:vertical {{ background: {colors['border']}; border-radius: 3px; min-height: 30px; }}
         """)

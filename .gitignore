@@ -10,3 +10,4 @@ build/
 *.aethercod
 .zcode/
 migrate.md
+=6.7

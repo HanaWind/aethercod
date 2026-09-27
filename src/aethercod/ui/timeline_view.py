@@ -6,6 +6,22 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsScene, QGraphicsView
 
+TIMELINE_THEME_DARK = {
+    "background": "#101828",
+    "axis": "#98a2b3",
+    "tick": "#667085",
+    "tick_label": "#eef1f5",
+    "empty_text": "#d0d5dd",
+}
+
+TIMELINE_THEME_LIGHT = {
+    "background": "#f6f8fa",
+    "axis": "#475467",
+    "tick": "#98a2b3",
+    "tick_label": "#101828",
+    "empty_text": "#344054",
+}
+
 
 class TimelineEntry(QGraphicsObject):
     activated = Signal(str)
@@ -74,9 +90,14 @@ class TimelineView(QGraphicsView):
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setBackgroundBrush(QColor("#101828"))
+        self._theme = dict(TIMELINE_THEME_DARK)
+        self.setBackgroundBrush(QColor(self._theme["background"]))
         self._entries: list[dict[str, Any]] = []
-        self._empty_message = None
+
+    def set_theme(self, dark: bool) -> None:
+        self._theme = dict(TIMELINE_THEME_DARK if dark else TIMELINE_THEME_LIGHT)
+        self.setBackgroundBrush(QColor(self._theme["background"]))
+        self.set_entries(self._entries)
 
     def set_entries(self, entries: list[dict[str, Any]]) -> None:
         self._entries = list(entries)
@@ -97,7 +118,7 @@ class TimelineView(QGraphicsView):
             message = self.timeline_scene.addText(
                 "暂无可定位年份的日期\n请先选择年份或调整筛选条件。", QFont("Segoe UI", 14)
             )
-            message.setDefaultTextColor(QColor("#98a2b3"))
+            message.setDefaultTextColor(QColor(self._theme["empty_text"]))
             message.setPos(260, 125)
             return
         years = [int(entry["year"]) for entry in positioned]
@@ -110,14 +131,16 @@ class TimelineView(QGraphicsView):
         left = 80.0
         axis_y = 200.0
         self.timeline_scene.addLine(
-            left, axis_y, left + span * scale + 120, axis_y, QPen(QColor("#98a2b3"), 2)
+            left, axis_y, left + span * scale + 120, axis_y, QPen(QColor(self._theme["axis"]), 2)
         )
         tick_step = 1 if span < 12 else max(1, span // 12)
         for year in range(start, end + 1, tick_step):
             x = left + (year - start) * scale
-            self.timeline_scene.addLine(x, axis_y - 8, x, axis_y + 8, QPen(QColor("#667085"), 1))
+            self.timeline_scene.addLine(
+                x, axis_y - 8, x, axis_y + 8, QPen(QColor(self._theme["tick"]), 1)
+            )
             text = self.timeline_scene.addText(str(year), QFont("Segoe UI", 8))
-            text.setDefaultTextColor(QColor("#d0d5dd"))
+            text.setDefaultTextColor(QColor(self._theme["tick_label"]))
             text.setPos(x - 18, axis_y + 12)
         occupied: dict[int, int] = {}
         for entry in sorted(positioned, key=lambda item: (int(item["year"]), item.get("name", ""))):
@@ -132,7 +155,7 @@ class TimelineView(QGraphicsView):
             item.activated.connect(self.entry_activated)
             self.timeline_scene.addItem(item)
             self.timeline_scene.addLine(
-                x + 8, y + 54, x + 8, axis_y, QPen(QColor("#98a2b3"), 1, Qt.DashLine)
+                x + 8, y + 54, x + 8, axis_y, QPen(QColor(self._theme["axis"]), 1, Qt.DashLine)
             )
         rect = self.timeline_scene.itemsBoundingRect().adjusted(-80, -80, 80, 80)
         self.timeline_scene.setSceneRect(rect)

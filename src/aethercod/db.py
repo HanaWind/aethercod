@@ -80,6 +80,19 @@ BUILTIN_FIELDS = {
     ],
 }
 
+# These fields are intentionally shared by every built-in type.  They keep the
+# editor useful for hybrid entries and user-defined roles without forcing all
+# semantics into a type-specific template.
+COMMON_FIELDS = [
+    ("定位/身份", "text", False, []),
+    ("核心特征", "textarea", False, []),
+]
+for _type_id in tuple(BUILTIN_FIELDS):
+    _existing_names = {item[0] for item in BUILTIN_FIELDS[_type_id]}
+    BUILTIN_FIELDS[_type_id].extend(
+        item for item in COMMON_FIELDS if item[0] not in _existing_names
+    )
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS project_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

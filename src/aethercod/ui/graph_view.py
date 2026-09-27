@@ -24,13 +24,37 @@ class GraphNodeData:
     type_name: str = ""
 
 
+# High-contrast palettes for the graph canvas. Node labels are drawn outside the
+# circle, so they must contrast with the canvas background, not the node fill.
+GRAPH_THEME_DARK = {
+    "background": "#111827",
+    "node_label": "#f2f4f7",
+    "hover_border": "#ffffff",
+    "edge": "#667085",
+    "edge_highlight": "#5eead4",
+    "edge_label": "#d0d5dd",
+}
+
+GRAPH_THEME_LIGHT = {
+    "background": "#f6f8fa",
+    "node_label": "#101828",
+    "hover_border": "#1d2939",
+    "edge": "#98a2b3",
+    "edge_highlight": "#0f766e",
+    "edge_label": "#344054",
+}
+
+
 class GraphNode(QGraphicsObject):
     activated = Signal(str)
+    LABEL_WIDTH = 190.0
+    LABEL_BOTTOM = 34.0
 
-    def __init__(self, data: GraphNodeData, radius: float = 34.0):
+    def __init__(self, data: GraphNodeData, radius: float = 34.0, theme: dict | None = None):
         super().__init__()
         self.data = data
         self.radius = radius
+        self.theme = theme or GRAPH_THEME_DARK
         self.edges: list[GraphEdge] = []
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
@@ -39,8 +63,14 @@ class GraphNode(QGraphicsObject):
         self._hovered = False
 
     def boundingRect(self) -> QRectF:
+        # Must cover the full 190px-wide label drawn below the circle, otherwise
+        # scene().itemsBoundingRect() (and thus PNG export) clips edge labels.
+        top = -self.radius - 3
         return QRectF(
-            -self.radius - 2, -self.radius - 2, (self.radius + 2) * 2, (self.radius + 2) * 2 + 30
+            -self.LABEL_WIDTH / 2,
+            top,
+            self.LABEL_WIDTH,
+            self.radius + self.LABEL_BOTTOM - top,
         )
 
     def paint(self, painter: QPainter, _option, _widget=None) -> None:
@@ -50,7 +80,7 @@ class GraphNode(QGraphicsObject):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(
             QPen(
-                QColor("#ffffff") if self._hovered else color.lighter(125),
+                QColor(self.theme["hover_border"]) if self._hovered else color.lighter(125),
                 3 if self._hovered else 2,
             )
         )
@@ -61,10 +91,14 @@ class GraphNode(QGraphicsObject):
         painter.drawText(
             QRectF(-self.radius, -12, self.radius * 2, 24), Qt.AlignCenter, self.data.icon
         )
-        painter.setPen(QPen(QColor("#eef1f5")))
+        painter.setPen(QPen(QColor(self.theme["node_label"])))
         painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
         name = self.data.name if len(self.data.name) <= 18 else self.data.name[:17] + "…"
-        painter.drawText(QRectF(-90, self.radius + 5, 180, 22), Qt.AlignCenter, name)
+        painter.drawText(
+            QRectF(-self.LABEL_WIDTH / 2 + 5, self.radius + 5, self.LABEL_WIDTH - 10, 22),
+            Qt.AlignCenter,
+            name,
+        )
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
@@ -92,17 +126,38 @@ class GraphNode(QGraphicsObject):
 
 
 class GraphEdge(QGraphicsPathItem):
-    def __init__(self, source: GraphNode, target: GraphNode, label: str = ""):
+    LABEL_WIDTH = 140.0
+    LABEL_HEIGHT = 18.0
+    ARROW_SIZE = 12.0
+
+    def __init__(
+        self, source: GraphNode, target: GraphNode, label: str = "", theme: dict | None = None
+    ):
         super().__init__()
         self.source = source
         self.target = target
         self.label = label
+        self.theme = theme or GRAPH_THEME_DARK
         self._highlighted = False
         self.setZValue(-1)
         self.setAcceptedMouseButtons(Qt.NoButton)
         source.edges.append(self)
         target.edges.append(self)
         self.update_path()
+
+    def boundingRect(self) -> QRectF:
+        # Labels and the arrowhead are painted beyond the stroke path; include
+        # them so export bounds cover the whole drawing.
+        return (
+            self.path()
+            .boundingRect()
+            .adjusted(
+                -self.LABEL_WIDTH / 2 - 8,
+                -self.LABEL_HEIGHT - 8,
+                self.LABEL_WIDTH / 2 + 8,
+                self.LABEL_HEIGHT + self.ARROW_SIZE,
+            )
+        )
 
     def update_path(self) -> None:
         start, end = self.source.pos(), self.target.pos()
@@ -122,7 +177,7 @@ class GraphEdge(QGraphicsPathItem):
     def paint(self, painter: QPainter, _option, _widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
         pen = QPen(
-            QColor("#a78bfa") if self._highlighted else QColor("#667085"),
+            QColor(self.theme["edge_highlight"] if self._highlighted else self.theme["edge"]),
             3 if self._highlighted else 1.5,
         )
         painter.setPen(pen)
@@ -133,7 +188,7 @@ class GraphEdge(QGraphicsPathItem):
             tangent = self.path().pointAtPercent(0.94) - point
             angle = math.atan2(tangent.y(), tangent.x())
             arrow = QPainterPath()
-            size = 8.0
+            size = self.ARROW_SIZE
             arrow.moveTo(point)
             arrow.lineTo(
                 point + QPointF(math.cos(angle + 0.55) * size, math.sin(angle + 0.55) * size)
@@ -146,10 +201,17 @@ class GraphEdge(QGraphicsPathItem):
             painter.drawPath(arrow)
         if self.label:
             midpoint = self.path().pointAtPercent(0.5)
-            painter.setPen(QPen(QColor("#d0d5dd")))
+            painter.setPen(QPen(QColor(self.theme["edge_label"])))
             painter.setFont(QFont("Segoe UI", 8))
             painter.drawText(
-                QRectF(midpoint.x() - 70, midpoint.y() - 18, 140, 18), Qt.AlignCenter, self.label
+                QRectF(
+                    midpoint.x() - self.LABEL_WIDTH / 2,
+                    midpoint.y() - self.LABEL_HEIGHT,
+                    self.LABEL_WIDTH,
+                    self.LABEL_HEIGHT,
+                ),
+                Qt.AlignCenter,
+                self.label,
             )
 
 
@@ -163,13 +225,23 @@ class GraphView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setBackgroundBrush(QColor("#111827"))
+        self._theme = dict(GRAPH_THEME_DARK)
+        self.setBackgroundBrush(QColor(self._theme["background"]))
         self._nodes: dict[str, GraphNode] = {}
         self._edges: list[GraphEdge] = []
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._relax)
         self._timer.start(70)
+
+    def set_theme(self, dark: bool) -> None:
+        self._theme = dict(GRAPH_THEME_DARK if dark else GRAPH_THEME_LIGHT)
+        self.setBackgroundBrush(QColor(self._theme["background"]))
+        for item in self.graph_scene.items():
+            if isinstance(item, (GraphNode, GraphEdge)):
+                item.theme = self._theme
+                item.update()
+        self.viewport().update()
 
     def load_graph(self, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
         self.graph_scene.clear()
@@ -188,7 +260,7 @@ class GraphView(QGraphicsView):
         count = max(1, len(converted))
         radius = max(160.0, count * 35.0)
         for index, data in enumerate(converted):
-            item = GraphNode(data)
+            item = GraphNode(data, theme=self._theme)
             angle = 2 * math.pi * index / count
             item.setPos(math.cos(angle) * radius, math.sin(angle) * radius)
             item.activated.connect(self.node_activated)
@@ -198,7 +270,7 @@ class GraphView(QGraphicsView):
             source = self._nodes.get(str(edge.get("source_id")))
             target = self._nodes.get(str(edge.get("target_id")))
             if source and target:
-                relation = GraphEdge(source, target, str(edge.get("label", "")))
+                relation = GraphEdge(source, target, str(edge.get("label", "")), theme=self._theme)
                 self.graph_scene.addItem(relation)
                 self._edges.append(relation)
         self.graph_scene.setSceneRect(
@@ -269,15 +341,24 @@ class GraphView(QGraphicsView):
         )
 
     def export_png(self, path: str, scale: int = 2) -> None:
-        rect = self.graph_scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        # itemsBoundingRect() now includes labels/arrows via each item's
+        # boundingRect, so the export covers the complete network.
+        rect = self.graph_scene.itemsBoundingRect().adjusted(-40, -40, 40, 40)
+        if rect.width() < 1 or rect.height() < 1:
+            rect = QRectF(0, 0, 200, 120)
+        self.graph_scene.setSceneRect(rect)
         size = rect.size().toSize() * scale
         image = QImage(size, QImage.Format_ARGB32_Premultiplied)
-        image.fill(QColor("#111827"))
+        image.fill(QColor(self._theme["background"]))
         painter = QPainter(image)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.scale(scale, scale)
-        painter.translate(-rect.left(), -rect.top())
-        self.graph_scene.render(painter, QRectF(), rect)
+        # Map the full source rect onto the entire image; an explicit target
+        # avoids relying on painter viewport defaults that clipped labels.
+        self.graph_scene.render(
+            painter,
+            QRectF(0.0, 0.0, rect.width() * scale, rect.height() * scale),
+            rect,
+        )
         painter.end()
         if not image.save(path):
             raise OSError(f"无法写入关系图：{path}")
