@@ -129,6 +129,69 @@ class ColorDialog(AnimatedDialog):
         return self.wheel.color().name()
 
 
+class EntityPreviewDialog(AnimatedDialog):
+    """Read-only context preview used by timeline and graph navigation."""
+
+    def __init__(self, entity: Entity, relations: list[dict], parent=None):
+        super().__init__(parent)
+        self.entity = entity
+        self.relations = relations
+        self.open_editor = False
+        self.next_entity_id = None
+        self.setWindowTitle(f"词条预览 · {entity.name}")
+        self.setMinimumSize(560, 460)
+
+        title = QLabel(entity.name)
+        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        meta = QLabel(f"{entity.type_id}  ·  {MainWindow.display_uuid(entity.id)}")
+        meta.setWordWrap(True)
+        summary = QLabel(entity.summary or "暂无摘要")
+        summary.setWordWrap(True)
+        self.notes = QTextBrowser()
+        self.notes.setPlainText(entity.notes or "暂无正文")
+        self.notes.setMinimumHeight(180)
+        relation_label = QLabel("关联")
+        self.relation_list = QListWidget()
+        for row in relations:
+            item = QListWidgetItem(
+                f"{row.get('display_label', '相关')}  ·  {row.get('other_name', '无效引用')}"
+            )
+            item.setData(Qt.UserRole, row.get("other_id"))
+            self.relation_list.addItem(item)
+        if not relations:
+            self.relation_list.addItem("暂无关联")
+        self.relation_list.itemDoubleClicked.connect(self._open_relation)
+
+        self.open_button = QPushButton("打开词条编辑")
+        self.open_button.clicked.connect(self._open_editor)
+        close_button = QPushButton("关闭")
+        close_button.setProperty("class", "secondary")
+        close_button.clicked.connect(self.reject)
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        button_row.addWidget(close_button)
+        button_row.addWidget(self.open_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(meta)
+        layout.addWidget(summary)
+        layout.addWidget(self.notes, 1)
+        layout.addWidget(relation_label)
+        layout.addWidget(self.relation_list)
+        layout.addLayout(button_row)
+
+    def _open_editor(self) -> None:
+        self.open_editor = True
+        self.accept()
+
+    def _open_relation(self, item: QListWidgetItem) -> None:
+        target_id = item.data(Qt.UserRole)
+        if target_id:
+            self.next_entity_id = str(target_id)
+            self.accept()
+
+
 class MainWindow(QMainWindow):
     project_changed = Signal()
 
@@ -151,6 +214,9 @@ class MainWindow(QMainWindow):
         self._page_refreshing = False
         self._build_actions()
         self._build_ui()
+        saved_geometry = self.settings.value("window_geometry")
+        if saved_geometry:
+            self.restoreGeometry(saved_geometry)
         self._apply_theme()
         self._set_enabled(False)
         self.statusBar().showMessage("请新建或打开一个 .aethercod 项目")
@@ -447,6 +513,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已打开：{self.project_path.name}")
 
     def new_project(self):
+        if not self._confirm_unsaved():
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "新建 Aethercod 项目", "world.aethercod", "Aethercod 项目 (*.aethercod)"
         )
@@ -454,6 +522,8 @@ class MainWindow(QMainWindow):
             self._open_conn(path)
 
     def open_project(self):
+        if not self._confirm_unsaved():
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "打开 Aethercod 项目", "", "Aethercod 项目 (*.aethercod);;SQLite 数据库 (*.db)"
         )
@@ -536,7 +606,20 @@ class MainWindow(QMainWindow):
             item.setForeground(QColor(entity.color))
             self.entity_list.addItem(item)
         self.entity_list.blockSignals(False)
-        if entities:
+        if self.dirty and self.current_id:
+            matching_row = next(
+                (
+                    row
+                    for row in range(self.entity_list.count())
+                    if self.entity_list.item(row).data(Qt.UserRole) == self.current_id
+                ),
+                None,
+            )
+            if matching_row is None:
+                self.entity_list.clearSelection()
+            else:
+                self.entity_list.setCurrentRow(matching_row)
+        elif entities:
             self.entity_list.setCurrentRow(0)
         else:
             self.clear_detail()
@@ -545,23 +628,33 @@ class MainWindow(QMainWindow):
 
     def entity_selected(self, current, _previous):
         if current:
-            if self._draft_entity and current.data(Qt.UserRole) != self._draft_entity.id:
+            if self.dirty and current.data(Qt.UserRole) == self.current_id:
+                return
+            if self.current_id and current.data(Qt.UserRole) != self.current_id and self.dirty:
                 answer = QMessageBox.question(
                     self,
                     "未保存的词条",
-                    "当前词条尚未保存，是否放弃草稿？",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
+                    "当前词条尚未保存，是否保存后切换？",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                    QMessageBox.Save,
                 )
-                if answer != QMessageBox.Yes:
+                if answer == QMessageBox.Cancel or (
+                    answer == QMessageBox.Save and not self.save_entity()
+                ):
                     self.entity_list.blockSignals(True)
+                    restored = False
                     for row in range(self.entity_list.count()):
                         if self.entity_list.item(row).data(Qt.UserRole) == self.current_id:
                             self.entity_list.setCurrentRow(row)
+                            restored = True
                             break
+                    if not restored:
+                        self.entity_list.clearSelection()
                     self.entity_list.blockSignals(False)
                     return
-                self._draft_entity = None
+                if answer == QMessageBox.Discard:
+                    self._draft_entity = None
+                    self.clear_dirty()
             self.load_entity(current.data(Qt.UserRole))
 
     def mark_dirty(self, *_args) -> None:
@@ -682,35 +775,28 @@ class MainWindow(QMainWindow):
     def new_entity(self):
         if not self.service or self.read_only:
             return
-        if self._draft_entity and self.dirty:
-            answer = QMessageBox.question(
-                self,
-                "未保存的词条",
-                "当前词条尚未保存，是否放弃并新建？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return
+        if not self._confirm_unsaved():
+            return
         entity = self.service.new_entity(
             self.type_filter.currentData() or self.service.taxonomy.list_types()[0].id
         )
         self._draft_entity = entity
+        self.entity_list.clearSelection()
         self.load_entity(entity.id)
         self.name_edit.selectAll()
         self.name_edit.setFocus()
         self.statusBar().showMessage("正在编辑新词条草稿，填写完成后点击保存", 4000)
 
-    def save_entity(self):
+    def save_entity(self) -> bool:
         if not self.service or not self.current_id or self.read_only:
-            return
+            return False
         entity = (
             self._draft_entity
             if self._draft_entity and self._draft_entity.id == self.current_id
             else self.service.entities.get(self.current_id)
         )
         if entity is None:
-            return
+            return False
         entity.name = self.name_edit.text().strip() or "未命名词条"
         entity.type_id = self.type_edit.currentData() or entity.type_id
         entity.summary = self.summary_edit.text().strip()
@@ -719,7 +805,11 @@ class MainWindow(QMainWindow):
         entity.notes = self.notes_edit.toPlainText()
         entity.remarks = self.remarks_edit.toPlainText()
         entity.color = self.current_color
-        custom, dates = self.specialized.values()
+        try:
+            custom, dates = self.specialized.values()
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            QMessageBox.warning(self, "无法保存", str(exc))
+            return False
         entity.custom_fields = custom
         entity.dates = dates
         sync_field = (
@@ -734,21 +824,42 @@ class MainWindow(QMainWindow):
             self.service.save_entity(entity, requested_redirects)
         except ValueError as exc:
             QMessageBox.warning(self, "无法保存", str(exc))
-            return
+            return False
         self._draft_entity = None
+        self.clear_dirty()
         self.refresh_entities()
         self.load_entity(entity.id)
-        self.clear_dirty()
         self.statusBar().showMessage("词条已保存", 2500)
+        return True
+
+    def _confirm_unsaved(self) -> bool:
+        if not self.dirty or self.read_only:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "未保存的修改",
+            "当前词条有未保存修改，是否保存？",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if answer == QMessageBox.Cancel:
+            return False
+        if answer == QMessageBox.Discard:
+            self._draft_entity = None
+            self.clear_dirty()
+            return True
+        return self.save_entity()
 
     def delete_entity(self):
-        if (
-            self.service
-            and self.current_id
-            and not self.read_only
-            and QMessageBox.question(self, "移入回收区", "保留关系并软删除当前词条？")
-            == QMessageBox.Yes
-        ):
+        if not self.service or not self.current_id or self.read_only:
+            return
+        draft_id = self._draft_entity.id if self._draft_entity else None
+        if not self._confirm_unsaved():
+            return
+        if draft_id == self.current_id:
+            self.clear_detail()
+            return
+        if QMessageBox.question(self, "移入回收区", "保留关系并软删除当前词条？") == QMessageBox.Yes:
             self.service.entities.soft_delete(self.current_id)
             self.refresh_entities()
             self.clear_detail()
@@ -808,8 +919,12 @@ class MainWindow(QMainWindow):
         dialog = RelationDialog(
             self.service.entities.list(), self.current_id, self, title="编辑关系"
         )
-        dialog.label.setText(row["label"])
-        dialog.reverse.setText(row["reverse_label"])
+        if row["direction"] == "out":
+            dialog.label.setText(row["label"])
+            dialog.reverse.setText(row["reverse_label"])
+        else:
+            dialog.label.setText(row["reverse_label"] or row["label"])
+            dialog.reverse.setText(row["label"] if row["reverse_label"] else "")
         dialog.notes.setPlainText(row["notes"])
         index = dialog.target.findData(row["other_id"])
         dialog.target.setCurrentIndex(index)
@@ -817,13 +932,18 @@ class MainWindow(QMainWindow):
             target, label, reverse, notes = dialog.values()
             source_id = self.current_id if row["direction"] == "out" else target
             target_id = target if row["direction"] == "out" else self.current_id
+            if row["direction"] == "out":
+                stored_label, stored_reverse = label, reverse
+            else:
+                stored_label = reverse or (row["label"] if not row["reverse_label"] else "")
+                stored_reverse = label if row["reverse_label"] or reverse else ""
             try:
                 self.service.relations.update(
                     row["id"],
                     source_id=source_id,
                     target_id=target_id,
-                    label=label,
-                    reverse_label=reverse,
+                    label=stored_label,
+                    reverse_label=stored_reverse,
                     notes=notes,
                 )
             except ValueError as exc:
@@ -859,8 +979,7 @@ class MainWindow(QMainWindow):
             token = url.host() or url.path().lstrip("/")
             target = self.service.search.resolve(token) if self.service else None
             if target:
-                self.load_entity(target.id)
-                self.content_tabs.setCurrentIndex(0)
+                self.open_entity_preview(target.id)
 
     def choose_color(self):
         if self.read_only:
@@ -876,13 +995,14 @@ class MainWindow(QMainWindow):
         if not swatch.isValid():
             swatch = QColor("#7c3aed")
         pressed = swatch.darker(118).name()
+        text = "#17212b" if swatch.lightnessF() >= 0.58 else "#ffffff"
         self.color_button.setStyleSheet(
             "QPushButton {"
-            f"background: {swatch.name()}; border: 1px solid {swatch.darker(130).name()}; "
+            f"background: {swatch.name()}; color: {text}; border: 1px solid {swatch.darker(130).name()}; "
             "border-radius: 4px; }"
             "QPushButton:hover { border: 2px solid #ffffff; }"
-            f"QPushButton:pressed {{ background: {pressed}; border: 2px solid #ffffff; }}"
-            f"QPushButton:disabled {{ background: {swatch.darker(135).name()}; }}"
+            f"QPushButton:pressed {{ background: {pressed}; color: {text}; border: 2px solid #ffffff; }}"
+            f"QPushButton:disabled {{ background: {swatch.darker(135).name()}; color: {text}; }}"
         )
 
     def copy_uuid(self):
@@ -1007,8 +1127,7 @@ class MainWindow(QMainWindow):
             self.content_tabs.setCurrentIndex(1)
 
     def graph_node_opened(self, entity_id: str):
-        self.load_entity(entity_id)
-        self.content_tabs.setCurrentIndex(0)
+        self.open_entity_preview(entity_id)
 
     def export_graph_png(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1019,8 +1138,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("关系图已导出", 2500)
 
     def timeline_entry_opened(self, entity_id: str):
-        self.load_entity(entity_id)
-        self.content_tabs.setCurrentIndex(0)
+        self.open_entity_preview(entity_id)
+
+    def open_entity_preview(self, entity_id: str) -> None:
+        if not self.service:
+            return
+        entity = self.service.entities.get(entity_id, include_deleted=False)
+        if not entity:
+            return
+        while entity:
+            dialog = EntityPreviewDialog(entity, self.service.relation_rows(entity.id), self)
+            dialog.exec()
+            if dialog.next_entity_id:
+                entity = self.service.entities.get(dialog.next_entity_id, include_deleted=False)
+                continue
+            if dialog.open_editor:
+                if self._confirm_unsaved():
+                    self.load_entity(entity.id)
+                    self.content_tabs.setCurrentIndex(0)
+            return
 
     def show_timeline(self, _checked=False, *, select_page=True):
         if select_page:
@@ -1045,7 +1181,7 @@ class MainWindow(QMainWindow):
             self.content_tabs.setCurrentIndex(2)
 
     def show_type_manager(self):
-        if self.service and not self.read_only:
+        if self.service and not self.read_only and self._confirm_unsaved():
             TypeManagerDialog(self.service.taxonomy, self).exec()
             self._populate_types()
             self.refresh_entities()
@@ -1054,7 +1190,7 @@ class MainWindow(QMainWindow):
         if not self.service:
             return
         dialog = ValidationDialog(self.service, self, read_only=self.read_only)
-        dialog.entity_requested.connect(self.load_entity)
+        dialog.entity_requested.connect(self.open_entity_preview)
         dialog.exec()
 
     def export_json(self):
@@ -1076,6 +1212,8 @@ class MainWindow(QMainWindow):
 
     def import_json(self):
         if not self.conn or self.read_only:
+            return
+        if not self._confirm_unsaved():
             return
         path, _ = QFileDialog.getOpenFileName(self, "导入 JSON", "", "JSON 文件 (*.json)")
         if not path:
@@ -1106,6 +1244,8 @@ class MainWindow(QMainWindow):
 
     def import_markdown(self):
         if not self.service or self.read_only:
+            return
+        if not self._confirm_unsaved():
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "导入 Markdown", "", "Markdown 文件 (*.md *.markdown)"
@@ -1144,6 +1284,8 @@ class MainWindow(QMainWindow):
 
     def show_recycle_bin(self):
         if not self.service or self.read_only:
+            return
+        if not self._confirm_unsaved():
             return
         deleted = [
             item for item in self.service.entities.list(include_deleted=True) if item.deleted_at
@@ -1184,8 +1326,9 @@ class MainWindow(QMainWindow):
             if answer == QMessageBox.Cancel:
                 event.ignore()
                 return
-            if answer == QMessageBox.Save:
-                self.save_entity()
+            if answer == QMessageBox.Save and not self.save_entity():
+                event.ignore()
+                return
         if self.conn:
             self.conn.close()
         self.settings.setValue("window_geometry", self.saveGeometry())

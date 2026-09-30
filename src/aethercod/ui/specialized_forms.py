@@ -312,7 +312,7 @@ class SpecializedForm(QWidget):
         if isinstance(widget, OptionalNumber):
             return widget.value()
         if isinstance(widget, WorldDateSelector):
-            return widget.date_text()
+            return widget.value("custom")
         if isinstance(widget, QListWidget):
             return [
                 widget.item(i).data(Qt.UserRole)
@@ -366,7 +366,10 @@ class SpecializedForm(QWidget):
                 if isinstance(widget, OptionalNumber):
                     widget.set_value(value)
                 elif isinstance(widget, WorldDateSelector):
-                    widget.set_date_text(value)
+                    if isinstance(value, dict):
+                        widget.set_value(value)
+                    else:
+                        widget.set_date_text(value)
                 elif isinstance(widget, QListWidget):
                     selected = value if isinstance(value, list) else []
                     for i in range(widget.count()):

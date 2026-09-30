@@ -38,12 +38,25 @@ def apply_theme(app: QApplication, dark: bool) -> None:
     palette.setColor(QPalette.Button, QColor(colors["panel"]))
     palette.setColor(QPalette.ButtonText, QColor(colors["text"]))
     palette.setColor(QPalette.PlaceholderText, QColor(colors["muted"]))
+    palette.setColor(QPalette.ToolTipBase, QColor(colors["panel"]))
+    palette.setColor(QPalette.ToolTipText, QColor(colors["text"]))
     palette.setColor(QPalette.Highlight, QColor(ACCENT))
     palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    for group in (QPalette.Disabled, QPalette.Inactive):
+        palette.setColor(group, QPalette.Window, QColor(colors["window"]))
+        palette.setColor(group, QPalette.Base, QColor(colors["panel"]))
+        palette.setColor(group, QPalette.Text, QColor(colors["muted"]))
+        palette.setColor(group, QPalette.WindowText, QColor(colors["muted"]))
+        palette.setColor(group, QPalette.ButtonText, QColor(colors["muted"]))
     app.setPalette(palette)
     app.setStyleSheet(f"""
         * {{ font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 13px; }}
         QMainWindow {{ background: {colors['window']}; }}
+        QDialog, QMessageBox, QInputDialog {{ background: {colors['window']}; color: {colors['text']}; }}
+        QMenu {{ background: {colors['panel']}; color: {colors['text']}; border: 1px solid {colors['border']}; }}
+        QMenu::item {{ padding: 6px 22px 6px 10px; }}
+        QMenu::item:selected {{ background: {ACCENT}; color: #ffffff; }}
+        QToolTip {{ background: {colors['panel']}; color: {colors['text']}; border: 1px solid {colors['border']}; padding: 5px; }}
         QToolBar {{ background: {colors['panel']}; padding: 6px; spacing: 4px; border: none; border-bottom: 1px solid {colors['border']}; }}
         QToolButton {{ padding: 6px 9px; border-radius: 4px; color: {colors['text']}; border: 1px solid transparent; }}
         QToolButton:hover {{ background: {colors['alternate']}; border-color: {colors['border']}; }}
@@ -73,10 +86,16 @@ def apply_theme(app: QApplication, dark: bool) -> None:
         QPushButton[class="danger"]:pressed {{ background: #7a271a; border-color: #7a271a; }}
         QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus {{ border: 1px solid {ACCENT}; }}
         QPushButton:disabled {{ background: {colors['alternate']}; color: {colors['muted']}; }}
+        QCheckBox, QRadioButton {{ color: {colors['text']}; spacing: 6px; }}
+        QCheckBox::indicator, QRadioButton::indicator {{ width: 15px; height: 15px; }}
+        QComboBox QAbstractItemView {{ background: {colors['panel']}; color: {colors['text']}; selection-background-color: {ACCENT}; }}
+        QHeaderView::section {{ background: {colors['alternate']}; color: {colors['text']}; border: none; padding: 6px; }}
         QDialogButtonBox QPushButton {{ min-width: 78px; }}
         QSplitter::handle {{ background: {colors['border']}; width: 2px; }}
         QStatusBar {{ background: {colors['panel']}; border-top: 1px solid {colors['border']}; color: {colors['muted']}; }}
         QLabel {{ color: {colors['text']}; }}
         QScrollBar:vertical {{ background: transparent; width: 10px; }}
         QScrollBar::handle:vertical {{ background: {colors['border']}; border-radius: 3px; min-height: 30px; }}
+        QScrollBar:horizontal {{ background: transparent; height: 10px; }}
+        QScrollBar::handle:horizontal {{ background: {colors['border']}; border-radius: 3px; min-width: 30px; }}
         """)

@@ -304,8 +304,32 @@ class TimelineService:
             + " ORDER BY COALESCE(d.year, 999999999), COALESCE(d.date_value, ''), "
             "e.name COLLATE NOCASE, d.id"
         )
-        rows = self.conn.execute(sql, args).fetchall()
-        return [dict(row) for row in rows]
+        rows = [dict(row) for row in self.conn.execute(sql, args).fetchall()]
+
+        def parse_year(value: Any) -> int | None:
+            if value is None:
+                return None
+            match = re.match(r"^([+-]?\d{1,6})(?:-|$)", str(value).strip())
+            return int(match.group(1)) if match else None
+
+        def date_key(row: dict[str, Any]) -> tuple[Any, ...]:
+            start_year = row["year"] if isinstance(row["year"], int) else parse_year(row["date_value"])
+            end_year = row["end_year"] if isinstance(row["end_year"], int) else parse_year(row["end_date_value"])
+            start_text = str(row.get("date_value") or "")
+            return (
+                start_year if start_year is not None else 10**12,
+                start_text,
+                end_year if end_year is not None else start_year if start_year is not None else 10**12,
+                str(row.get("name") or "").casefold(),
+                str(row.get("id") or ""),
+            )
+
+        for row in rows:
+            if row["year"] is None:
+                row["year"] = parse_year(row.get("date_value"))
+            if row["end_year"] is None:
+                row["end_year"] = parse_year(row.get("end_date_value"))
+        return sorted(rows, key=date_key)
 
     list_entries = entries
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from PySide6.QtCore import QRectF, Qt, Signal
@@ -23,6 +24,23 @@ TIMELINE_THEME_LIGHT = {
 }
 
 
+def format_terra_year(year: int) -> str:
+    """Keep signed years readable while making the calendar explicit."""
+    return f"TE -{abs(year)}" if year < 0 else f"TE {year}"
+
+
+def format_terra_date(value: str) -> str:
+    match = re.fullmatch(r"([+-]?\d{1,6})(?:-(\d{2})(?:-(\d{2}))?)?", str(value))
+    if not match:
+        return str(value)
+    result = format_terra_year(int(match.group(1)))
+    if match.group(2):
+        result += f"-{match.group(2)}"
+    if match.group(3):
+        result += f"-{match.group(3)}"
+    return result
+
+
 class TimelineEntry(QGraphicsObject):
     activated = Signal(str)
 
@@ -33,10 +51,22 @@ class TimelineEntry(QGraphicsObject):
         self.height = 54.0
         self.setPos(x, y)
         self.color = QColor(color)
+        self.text_color = (
+            QColor("#ffffff") if self.color.lightnessF() < 0.58 else QColor("#17212b")
+        )
         precision = str(entry.get("precision") or "")
-        date_text = str(entry.get("year") if entry.get("year") is not None else "未知年份")
-        if entry.get("end_year") is not None:
-            date_text += f" – {entry['end_year']}"
+        date_text = (
+            format_terra_date(str(entry.get("date_value")))
+            if entry.get("date_value")
+            else format_terra_year(int(entry["year"]))
+            if entry.get("year") is not None
+            else "未知年份"
+        )
+        end_text = format_terra_date(str(entry["end_date_value"])) if entry.get("end_date_value") else None
+        if end_text is None and entry.get("end_year") is not None:
+            end_text = format_terra_year(int(entry["end_year"]))
+        if end_text is not None:
+            date_text += f" – {end_text}"
         self.setToolTip(
             f"{entry.get('name', '')}\n{entry.get('label', entry.get('date_kind', ''))}\n{date_text} {precision}"
         )
@@ -52,8 +82,8 @@ class TimelineEntry(QGraphicsObject):
         fill = self.color if self.color.isValid() else QColor("#7c3aed")
         painter.setPen(QPen(QColor("#ffffff") if self.hovered else fill.lighter(120), 2))
         painter.setBrush(QBrush(fill.darker(125) if self.hovered else fill))
-        painter.drawRoundedRect(self.boundingRect(), 12, 12)
-        painter.setPen(QPen(QColor("#ffffff")))
+        painter.drawRoundedRect(self.boundingRect(), 5, 5)
+        painter.setPen(QPen(self.text_color))
         painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
         name = str(self.entry.get("name", "未命名"))
         label = str(self.entry.get("label") or self.entry.get("date_kind", ""))
@@ -105,8 +135,16 @@ class TimelineView(QGraphicsView):
         positioned = []
         for entry in self._entries:
             try:
+                entry = dict(entry)
+                if entry.get("year") is None and entry.get("date_value"):
+                    match = re.match(r"^([+-]?\d{1,6})(?:-|$)", str(entry["date_value"]))
+                    if match:
+                        entry["year"] = int(match.group(1))
+                if entry.get("end_year") is None and entry.get("end_date_value"):
+                    match = re.match(r"^([+-]?\d{1,6})(?:-|$)", str(entry["end_date_value"]))
+                    if match:
+                        entry["end_year"] = int(match.group(1))
                 if entry.get("year") is not None:
-                    entry = dict(entry)
                     entry["year"] = int(entry["year"])
                     if entry.get("end_year") is not None:
                         entry["end_year"] = int(entry["end_year"])
@@ -127,11 +165,13 @@ class TimelineView(QGraphicsView):
         ]
         start, end = min(years), max(years + end_years)
         span = max(1, end - start)
-        scale = max(1.0, min(12.0, 1200.0 / span))
+        available_width = max(720.0, float(self.viewport().width() - 80))
+        scale = max(0.02, min(24.0, available_width / span))
+        axis_width = max(available_width, span * scale + 120.0)
         left = 80.0
         axis_y = 200.0
         self.timeline_scene.addLine(
-            left, axis_y, left + span * scale + 120, axis_y, QPen(QColor(self._theme["axis"]), 2)
+            left, axis_y, left + axis_width, axis_y, QPen(QColor(self._theme["axis"]), 2)
         )
         tick_step = 1 if span < 12 else max(1, span // 12)
         for year in range(start, end + 1, tick_step):
@@ -139,9 +179,9 @@ class TimelineView(QGraphicsView):
             self.timeline_scene.addLine(
                 x, axis_y - 8, x, axis_y + 8, QPen(QColor(self._theme["tick"]), 1)
             )
-            text = self.timeline_scene.addText(str(year), QFont("Segoe UI", 8))
+            text = self.timeline_scene.addText(format_terra_year(year), QFont("Segoe UI", 8))
             text.setDefaultTextColor(QColor(self._theme["tick_label"]))
-            text.setPos(x - 18, axis_y + 12)
+            text.setPos(x - text.boundingRect().width() / 2, axis_y + 12)
         occupied: dict[int, int] = {}
         for entry in sorted(positioned, key=lambda item: (int(item["year"]), item.get("name", ""))):
             year = int(entry["year"])
@@ -151,6 +191,7 @@ class TimelineView(QGraphicsView):
             y = axis_y - 72 - lane * 66
             end_year = entry.get("end_year")
             width = ((int(end_year) - year) * scale + 110) if end_year is not None else 130
+            width = max(112.0, min(720.0, width))
             item = TimelineEntry(entry, x, y, width, str(entry.get("color", "#7c3aed")))
             item.activated.connect(self.entry_activated)
             self.timeline_scene.addItem(item)

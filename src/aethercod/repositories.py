@@ -374,12 +374,22 @@ class FieldDefinitionRepository:
     ) -> None:
         if value is None and allow_none:
             return
-        if field_type in {"text", "textarea", "string", "color", "url", "date"} and not isinstance(
-            value, str
-        ):
+        if field_type in {"text", "textarea", "string", "color", "url"} and not isinstance(value, str):
             raise ValueError(f"Expected string value for {field_type}")
-        if field_type == "date" and value:
-            validate_date_parts(None, value)
+        if field_type == "date":
+            if isinstance(value, str):
+                if value:
+                    validate_date_parts(None, value)
+            elif isinstance(value, dict):
+                validate_date_parts(
+                    value.get("year"),
+                    value.get("date_value"),
+                    value.get("precision", "exact"),
+                    value.get("end_year"),
+                    value.get("end_date_value"),
+                )
+            else:
+                raise ValueError("Expected date string or structured date value")
         if field_type in {"integer", "int"} and (
             isinstance(value, bool) or not isinstance(value, int)
         ):
@@ -776,10 +786,20 @@ class RelationRepository:
 
     def _check_endpoints(self, source_id: str, target_id: str) -> tuple[str, str]:
         source_id, target_id = normalize_uuid(source_id), normalize_uuid(target_id)
-        if not self.conn.execute("SELECT 1 FROM entities WHERE id=?", (source_id,)).fetchone():
+        source = self.conn.execute(
+            "SELECT deleted_at FROM entities WHERE id=?", (source_id,)
+        ).fetchone()
+        if not source:
             raise ValueError(f"Unknown relation source entity: {source_id}")
-        if not self.conn.execute("SELECT 1 FROM entities WHERE id=?", (target_id,)).fetchone():
+        if source["deleted_at"]:
+            raise ValueError("Cannot create a relation from a deleted entity")
+        target = self.conn.execute(
+            "SELECT deleted_at FROM entities WHERE id=?", (target_id,)
+        ).fetchone()
+        if not target:
             raise ValueError(f"Unknown relation target entity: {target_id}")
+        if target["deleted_at"]:
+            raise ValueError("Cannot create a relation to a deleted entity")
         return source_id, target_id
 
     def _check_duplicate(
