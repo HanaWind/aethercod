@@ -26,7 +26,7 @@ aethercod-gui = "aethercod.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aethercod = ["resources/*.svg", "resources/*.ico", "resources/*.png"]
+aethercod = ["resources/*.svg", "resources/*.ico", "resources/*.png", "ui/qml/*.qml"]
 
 [tool.black]
 line-length = 100

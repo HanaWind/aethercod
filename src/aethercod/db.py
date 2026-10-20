@@ -234,6 +234,8 @@ def initialize(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO project_meta(key,value) VALUES('name','Untitled World')"
         )
         conn.execute("INSERT OR IGNORE INTO project_meta(key,value) VALUES('description','')")
+        conn.execute("INSERT OR IGNORE INTO project_meta(key,value) VALUES('era_name','泰拉纪元')")
+        conn.execute("INSERT OR IGNORE INTO project_meta(key,value) VALUES('author','')")
         conn.execute("RELEASE SAVEPOINT aethercod_initialize")
     except Exception:
         conn.execute("ROLLBACK TO SAVEPOINT aethercod_initialize")

@@ -8,6 +8,4 @@ __pycache__/
 dist/
 build/
 *.aethercod
-.zcode/
 migrate.md
-=6.7
