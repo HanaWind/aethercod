@@ -17,6 +17,14 @@ ApplicationWindow {
     property string pendingRelationId: ""
     property string pendingFieldId: ""
 
+    onPageChanged: pageReveal.restart()
+
+    ParallelAnimation {
+        id: pageReveal
+        NumberAnimation { target: workspaceStack; property: "opacity"; from: 0.28; to: 1; duration: 210; easing.type: Easing.OutCubic }
+        NumberAnimation { target: workspaceStack; property: "scale"; from: 0.988; to: 1; duration: 240; easing.type: Easing.OutCubic }
+    }
+
     function terraYear(value) {
         return backend.formatYear(Number(value))
     }
@@ -118,14 +126,16 @@ ApplicationWindow {
         function resetParticles() {
             if (width <= 0 || height <= 0) return
             var next = []
-            for (var i = 0; i < 42; ++i) {
+            for (var i = 0; i < 96; ++i) {
                 next.push({
                     x: seeded(i + 1) * width,
                     y: seeded(i + 83) * height,
-                    vx: (seeded(i + 161) - 0.5) * 1.2,
-                    vy: (seeded(i + 239) - 0.5) * 0.9,
-                    radius: 1.8 + seeded(i + 317) * 4.5,
-                    alpha: 0.22 + seeded(i + 401) * 0.25,
+                    vx: (seeded(i + 161) - 0.5) * 1.45,
+                    vy: (seeded(i + 239) - 0.5) * 1.05,
+                    radius: 1.3 + seeded(i + 317) * 4.2,
+                    maxAlpha: 0.16 + seeded(i + 401) * 0.34,
+                    life: seeded(i + 463) * Math.PI * 2,
+                    lifeSpeed: 0.035 + seeded(i + 521) * 0.055,
                     tone: i % 3
                 })
             }
@@ -141,6 +151,22 @@ ApplicationWindow {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
             ctx.fillStyle = themeColors.backdrop
+            ctx.fillRect(0, 0, width, height)
+            var gradientAngle = phase * 0.55
+            var gradientX = Math.cos(gradientAngle) * width * 0.34
+            var gradientY = Math.sin(gradientAngle) * height * 0.34
+            var sweep = ctx.createLinearGradient(width / 2 - gradientX, height / 2 - gradientY,
+                                                  width / 2 + gradientX, height / 2 + gradientY)
+            if (root.darkMode) {
+                sweep.addColorStop(0, "rgba(15, 50, 48, 0.62)")
+                sweep.addColorStop(0.46, "rgba(18, 38, 54, 0.36)")
+                sweep.addColorStop(1, "rgba(64, 46, 34, 0.48)")
+            } else {
+                sweep.addColorStop(0, "rgba(166, 225, 210, 0.58)")
+                sweep.addColorStop(0.48, "rgba(190, 218, 236, 0.45)")
+                sweep.addColorStop(1, "rgba(241, 218, 174, 0.50)")
+            }
+            ctx.fillStyle = sweep
             ctx.fillRect(0, 0, width, height)
             var tones = root.darkMode
                 ? ["56, 150, 126", "65, 117, 159", "155, 125, 71"]
@@ -164,9 +190,10 @@ ApplicationWindow {
                     : particle.tone === 1
                     ? (root.darkMode ? "101, 176, 214" : "52, 134, 176")
                     : (root.darkMode ? "217, 180, 111" : "183, 132, 51")
+                var lifeFactor = Math.max(0, Math.sin(particle.life * 0.5))
                 ctx.beginPath()
-                ctx.fillStyle = "rgba(" + color + ", " + particle.alpha + ")"
-                ctx.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2)
+                ctx.fillStyle = "rgba(" + color + ", " + (particle.maxAlpha * lifeFactor * lifeFactor) + ")"
+                ctx.arc(particle.x, particle.y, particle.radius * (0.18 + lifeFactor * 0.82), 0, Math.PI * 2)
                 ctx.fill()
             }
         }
@@ -176,11 +203,21 @@ ApplicationWindow {
             repeat: true
             running: root.visible && root.visibility !== Window.Minimized
             onTriggered: {
-                ambientField.phase += 0.006
+                ambientField.phase += 0.012
                 for (var i = 0; i < ambientField.particles.length; ++i) {
                     var particle = ambientField.particles[i]
                     particle.x += particle.vx
                     particle.y += particle.vy
+                    particle.life += particle.lifeSpeed
+                    if (particle.life >= Math.PI * 2) {
+                        particle.life = 0
+                        particle.x = Math.random() * ambientField.width
+                        particle.y = Math.random() * ambientField.height
+                        particle.vx = (Math.random() - 0.5) * 1.45
+                        particle.vy = (Math.random() - 0.5) * 1.05
+                        particle.radius = 1.3 + Math.random() * 4.2
+                        particle.maxAlpha = 0.16 + Math.random() * 0.34
+                    }
                     if (particle.x < -8) particle.x = ambientField.width + 8
                     if (particle.x > ambientField.width + 8) particle.x = -8
                     if (particle.y < -8) particle.y = ambientField.height + 8
@@ -266,11 +303,27 @@ ApplicationWindow {
         }
     }
 
+    component PopupEnterTransition: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 190; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "scale"; from: 0.96; to: 1; duration: 220; easing.type: Easing.OutBack; easing.overshoot: 1.04 }
+        }
+    }
+
+    component PopupExitTransition: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 130; easing.type: Easing.InCubic }
+            NumberAnimation { property: "scale"; from: 1; to: 0.98; duration: 130; easing.type: Easing.InCubic }
+        }
+    }
+
     component FlatButton: Button {
         id: flatButton
         property bool primary: false
         hoverEnabled: true
         implicitHeight: 36
+        scale: down ? 0.97 : 1
+        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
         contentItem: Text {
             text: flatButton.text
             color: flatButton.enabled
@@ -299,6 +352,8 @@ ApplicationWindow {
         hoverEnabled: true
         implicitWidth: 36
         implicitHeight: 36
+        scale: down ? 0.92 : 1
+        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
         palette.window: themeColors.panel
         palette.windowText: themeColors.text
         palette.base: themeColors.panel
@@ -401,6 +456,8 @@ ApplicationWindow {
     Popup {
         id: projectActionsPopup
         objectName: "projectActionsPopup"
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         x: Math.max(16, root.width - width - 20)
         y: 8
         width: 264
@@ -572,6 +629,7 @@ ApplicationWindow {
             }
 
             StackLayout {
+                id: workspaceStack
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 currentIndex: root.page === "timeline" ? 1 : root.page === "graph" ? 2 : root.page === "validation" ? 3 : root.page === "settings" ? 4 : 0
@@ -744,6 +802,8 @@ ApplicationWindow {
                                                             background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                                                         }
                                                         popup: Popup {
+                                                            enter: PopupEnterTransition {}
+                                                            exit: PopupExitTransition {}
                                                             y: typeCombo.height - 1
                                                             width: typeCombo.width
                                                             implicitHeight: Math.min(contentItem.implicitHeight + 2, 320)
@@ -1010,6 +1070,8 @@ ApplicationWindow {
                                                             background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                                                         }
                                                         popup: Popup {
+                                                            enter: PopupEnterTransition {}
+                                                            exit: PopupExitTransition {}
                                                             y: referenceField.height - 1
                                                             width: referenceField.width
                                                             implicitHeight: Math.min(contentItem.implicitHeight + 2, 300)
@@ -1037,6 +1099,8 @@ ApplicationWindow {
                                                             background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                                                         }
                                                         popup: Popup {
+                                                            enter: PopupEnterTransition {}
+                                                            exit: PopupExitTransition {}
                                                             y: choiceField.height - 1
                                                             width: choiceField.width
                                                             implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
@@ -1182,6 +1246,8 @@ ApplicationWindow {
                                     background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                                 }
                                 popup: Popup {
+                                    enter: PopupEnterTransition {}
+                                    exit: PopupExitTransition {}
                                     y: timelineTypeFilter.height - 1
                                     width: timelineTypeFilter.width
                                     implicitHeight: Math.min(contentItem.implicitHeight + 2, 300)
@@ -1194,12 +1260,12 @@ ApplicationWindow {
                             IconButton { visible: backend.timelineTypeFilter !== ""; text: "×"; hint: "清除类型筛选"; onClicked: backend.setTimelineTypeFilter("") }
                             Text { text: backend.timelineCount + " 条"; color: themeColors.muted; font.pixelSize: 12 }
                             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: themeColors.border }
-                            IconButton { text: "−"; hint: "缩小时间尺度"; onClicked: timelineViewport.timelineScale = Math.max(0.6, timelineViewport.timelineScale - 0.2) }
+                            IconButton { text: "−"; hint: "缩小时间尺度"; onClicked: timelineViewport.zoomAt(timelineViewport.timelineScale - 0.2, timelineViewport.width / 2) }
                             FlatButton {
                                 text: Math.round(timelineViewport.timelineScale * 100) + "%"
-                                onClicked: timelineViewport.timelineScale = Math.max(0.6, timelineViewport.width / 1200)
+                                onClicked: timelineViewport.zoomAt(Math.max(0.6, timelineViewport.width / 1200), timelineViewport.width / 2)
                             }
-                            IconButton { text: "+"; hint: "放大时间尺度"; onClicked: timelineViewport.timelineScale = Math.min(5, timelineViewport.timelineScale + 0.2) }
+                            IconButton { text: "+"; hint: "放大时间尺度"; onClicked: timelineViewport.zoomAt(timelineViewport.timelineScale + 0.2, timelineViewport.width / 2) }
                         }
                         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: themeColors.border }
                         Flickable {
@@ -1211,6 +1277,27 @@ ApplicationWindow {
                             contentWidth: Math.max(width, 1200 * timelineScale)
                             contentHeight: Math.max(height, 390)
                             boundsBehavior: Flickable.StopAtBounds
+
+                            function zoomAt(nextScale, viewportX) {
+                                var clampedScale = Math.max(0.6, Math.min(5, Number(nextScale)))
+                                if (!isFinite(clampedScale) || Math.abs(clampedScale - timelineScale) < 0.0001) return
+                                var anchorX = Math.max(0, Math.min(width, Number(viewportX)))
+                                var relativePosition = (contentX + anchorX) / Math.max(1, contentWidth)
+                                timelineScale = clampedScale
+                                contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width), relativePosition * contentWidth - anchorX))
+                                timelineCanvas.requestPaint()
+                            }
+
+                            WheelHandler {
+                                id: timelineWheelZoom
+                                target: null
+                                onWheel: function(event) {
+                                    var wheelDelta = event.angleDelta.y !== 0 ? event.angleDelta.y : -event.pixelDelta.y
+                                    if (wheelDelta === 0) return
+                                    timelineViewport.zoomAt(timelineViewport.timelineScale * Math.pow(1.00155, wheelDelta), event.x)
+                                    event.accepted = true
+                                }
+                            }
                             GlassPanel {
                                 id: timelineSurface
                                 width: timelineViewport.contentWidth
@@ -1370,7 +1457,7 @@ ApplicationWindow {
                             Repeater {
                                 id: graphRepeater
                                 model: backend.graphModelObject
-                                delegate: Rectangle {
+                                delegate: Item {
                                     id: graphNode
                                     required property int index
                                     required property string id
@@ -1384,25 +1471,65 @@ ApplicationWindow {
                                     height: isCenter ? 70 : 62
                                     x: graphSurface.width / 2 + (graphSurface.width * positionX - graphSurface.width / 2) * graphSurface.graphScale - width / 2
                                     y: graphSurface.height / 2 + (graphSurface.height * positionY - graphSurface.height / 2) * graphSurface.graphScale - height / 2
-                                    radius: 5
-                                    color: isCenter ? themeColors.accentSoft : themeColors.panel
-                                    border.width: isCenter ? 2 : 1
-                                    border.color: isCenter ? themeColors.accent : nodeColor
                                     transform: Translate {
-                                        x: Math.sin(graphSurface.floatPhase + graphNode.index * 1.73) * (graphNode.isCenter ? 2.2 : 4.2)
-                                        y: Math.cos(graphSurface.floatPhase * 0.82 + graphNode.index * 2.11) * (graphNode.isCenter ? 1.8 : 3.4)
+                                        x: Math.sin(graphSurface.floatPhase + graphNode.index * 1.73) * (graphNode.isCenter ? 5.5 : 10.5)
+                                        y: Math.cos(graphSurface.floatPhase * 0.82 + graphNode.index * 2.11) * (graphNode.isCenter ? 4.5 : 8.5)
                                     }
                                     onXChanged: graphCanvas.requestPaint()
                                     onYChanged: graphCanvas.requestPaint()
+                                    Canvas {
+                                        id: graphNodeBody
+                                        anchors.fill: parent
+                                        antialiasing: true
+                                        onPaint: {
+                                            var ctx = getContext("2d")
+                                            var borderWidth = graphNode.isCenter ? 2 : 1
+                                            var centerX = width / 2
+                                            var centerY = height / 2
+                                            var radiusX = Math.max(1, centerX - borderWidth)
+                                            var radiusY = Math.max(1, centerY - borderWidth)
+                                            var curve = 0.5522847498
+                                            ctx.clearRect(0, 0, width, height)
+                                            ctx.beginPath()
+                                            ctx.moveTo(centerX, centerY - radiusY)
+                                            ctx.bezierCurveTo(centerX + radiusX * curve, centerY - radiusY,
+                                                              centerX + radiusX, centerY - radiusY * curve,
+                                                              centerX + radiusX, centerY)
+                                            ctx.bezierCurveTo(centerX + radiusX, centerY + radiusY * curve,
+                                                              centerX + radiusX * curve, centerY + radiusY,
+                                                              centerX, centerY + radiusY)
+                                            ctx.bezierCurveTo(centerX - radiusX * curve, centerY + radiusY,
+                                                              centerX - radiusX, centerY + radiusY * curve,
+                                                              centerX - radiusX, centerY)
+                                            ctx.bezierCurveTo(centerX - radiusX, centerY - radiusY * curve,
+                                                              centerX - radiusX * curve, centerY - radiusY,
+                                                              centerX, centerY - radiusY)
+                                            ctx.closePath()
+                                            ctx.fillStyle = graphNode.isCenter || nodeMouse.containsMouse ? themeColors.accentSoft : themeColors.panel
+                                            ctx.fill()
+                                            ctx.lineWidth = borderWidth
+                                            ctx.strokeStyle = graphNode.isCenter ? themeColors.accent : graphNode.nodeColor
+                                            ctx.stroke()
+                                        }
+                                    }
+                                    Connections {
+                                        target: root
+                                        function onDarkModeChanged() { graphNodeBody.requestPaint() }
+                                    }
                                     Column {
                                         anchors.fill: parent
-                                        anchors.margins: 10
+                                        anchors.leftMargin: 23
+                                        anchors.rightMargin: 23
+                                        anchors.topMargin: 10
+                                        anchors.bottomMargin: 10
                                         spacing: 4
                                         Text { width: parent.width; text: name; color: themeColors.text; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter }
                                         Text { width: parent.width; text: isCenter ? "当前词条" : typeName; color: isCenter ? themeColors.accent : themeColors.muted; font.pixelSize: 10; elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter }
                                     }
                                     MouseArea {
+                                        id: nodeMouse
                                         anchors.fill: parent
+                                        hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         drag.target: graphNode
                                         drag.minimumX: 0
@@ -1410,7 +1537,10 @@ ApplicationWindow {
                                         drag.minimumY: 0
                                         drag.maximumY: graphSurface.height - graphNode.height
                                         onDoubleClicked: { backend.previewEntity(id); previewDialog.open() }
-                                        onClicked: if (mouse.modifiers & Qt.ControlModifier) backend.selectEntity(id)
+                                        onClicked: function(mouse) {
+                                            if (mouse.modifiers & Qt.ControlModifier) backend.selectEntity(id)
+                                        }
+                                        onContainsMouseChanged: graphNodeBody.requestPaint()
                                     }
                                 }
                             }
@@ -1571,6 +1701,8 @@ ApplicationWindow {
     Dialog {
         id: newProjectDialog
         objectName: "newProjectDialog"
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "创建资料库"
@@ -1625,6 +1757,8 @@ ApplicationWindow {
 
     Dialog {
         id: fieldDefinitionDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: fieldIdInput.text ? "编辑属性定义" : "添加属性定义"
@@ -1672,6 +1806,8 @@ ApplicationWindow {
                         background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                     }
                     popup: Popup {
+                        enter: PopupEnterTransition {}
+                        exit: PopupExitTransition {}
                         y: fieldTypeCombo.height - 1
                         width: fieldTypeCombo.width
                         implicitHeight: Math.min(contentItem.implicitHeight + 2, 300)
@@ -1702,6 +1838,8 @@ ApplicationWindow {
 
     Dialog {
         id: fieldDeleteDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "删除属性定义"
@@ -1719,6 +1857,8 @@ ApplicationWindow {
 
     Dialog {
         id: dateDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: dateIdField.text ? "编辑时间记录" : "添加时间记录"
@@ -1774,6 +1914,8 @@ ApplicationWindow {
                         background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                     }
                     popup: Popup {
+                        enter: PopupEnterTransition {}
+                        exit: PopupExitTransition {}
                         y: datePrecision.height - 1
                         width: datePrecision.width
                         implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
@@ -1849,6 +1991,8 @@ ApplicationWindow {
 
     Dialog {
         id: relationDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: backend.relationEditId ? "编辑关联" : "添加关联"
@@ -1890,6 +2034,8 @@ ApplicationWindow {
                         background: Rectangle { color: parent.highlighted ? themeColors.accentSoft : parent.hovered ? themeColors.panelAlt : themeColors.panel }
                     }
                     popup: Popup {
+                        enter: PopupEnterTransition {}
+                        exit: PopupExitTransition {}
                         y: relationTarget.height - 1
                         width: relationTarget.width
                         implicitHeight: Math.min(contentItem.implicitHeight + 2, 320)
@@ -1936,6 +2082,8 @@ ApplicationWindow {
 
     Dialog {
         id: relationDeleteDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "删除关联"
@@ -1953,6 +2101,8 @@ ApplicationWindow {
 
     Dialog {
         id: importConfirmDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "导入资料库"
@@ -1970,6 +2120,8 @@ ApplicationWindow {
 
     Dialog {
         id: previewDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "词条预览"
@@ -2003,6 +2155,8 @@ ApplicationWindow {
 
     Dialog {
         id: deleteDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "删除词条"
@@ -2020,6 +2174,8 @@ ApplicationWindow {
 
     Dialog {
         id: unsavedDialog
+        enter: PopupEnterTransition {}
+        exit: PopupExitTransition {}
         modal: true
         padding: 16
         title: "未保存的修改"

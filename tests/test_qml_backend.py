@@ -6,7 +6,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QPoint, QPointF, Qt, QUrl
 from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -254,6 +254,16 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         value, undefined = evaluation.evaluate()
         assert not evaluation.hasError(), evaluation.error().toString()
         assert not undefined and value == expected
+    viewport_expression = QQmlExpression(context, root, "timelineViewport")
+    timeline_viewport, undefined = viewport_expression.evaluate()
+    assert not viewport_expression.hasError(), viewport_expression.error().toString()
+    assert not undefined and timeline_viewport is not None
+    viewport_center = timeline_viewport.mapToScene(
+        QPointF(timeline_viewport.width() / 2, timeline_viewport.height() / 2)
+    )
+    QTest.wheelEvent(root, viewport_center, QPoint(0, 120))
+    QTest.qWait(40)
+    assert timeline_viewport.property("timelineScale") > 1, errors
     for expression in (
         "projectActionsPopup.open()",
         "projectActionsPopup.close()",
@@ -261,7 +271,7 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         "newProjectDialog.close()",
         "timelineTypeFilter.popup.open()",
         "timelineTypeFilter.popup.close()",
-        "timelineViewport.timelineScale = 1.8",
+        "timelineViewport.zoomAt(1.8, timelineViewport.width / 2)",
         "root.page = 'entries'",
         "fieldDefinitionDialog.open()",
         "fieldTypeCombo.popup.open()",
@@ -284,6 +294,23 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         evaluation.evaluate()
         assert not evaluation.hasError(), evaluation.error().toString()
         QTest.qWait(20)
+    root.setProperty("page", "graph")
+    QTest.qWait(80)
+    graph_node_expression = QQmlExpression(context, root, "graphRepeater.itemAt(0)")
+    graph_node, undefined = graph_node_expression.evaluate()
+    assert not graph_node_expression.hasError(), graph_node_expression.error().toString()
+    assert not undefined and graph_node is not None
+    graph_node_center = graph_node.mapToScene(
+        QPointF(graph_node.width() / 2, graph_node.height() / 2)
+    )
+    QTest.mouseClick(
+        root,
+        Qt.LeftButton,
+        Qt.ControlModifier,
+        QPoint(round(graph_node_center.x()), round(graph_node_center.y())),
+    )
+    QTest.qWait(40)
+    root.setProperty("page", "settings")
     scale_expression = QQmlExpression(context, root, "timelineViewport.timelineScale")
     scale, undefined = scale_expression.evaluate()
     assert not scale_expression.hasError(), scale_expression.error().toString()
