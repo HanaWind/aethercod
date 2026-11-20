@@ -132,12 +132,19 @@ CREATE TABLE IF NOT EXISTS entity_dates (
   label TEXT NOT NULL DEFAULT '', year INTEGER, date_value TEXT, precision TEXT NOT NULL DEFAULT 'exact',
   end_year INTEGER, end_date_value TEXT
 );
+CREATE TABLE IF NOT EXISTS entity_history (
+  id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, version INTEGER NOT NULL,
+  snapshot TEXT NOT NULL, changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL,
+  change_type TEXT NOT NULL, change_description TEXT NOT NULL DEFAULT '',
+  UNIQUE(entity_id, version)
+);
 CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type_id);
 CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source_id);
 CREATE INDEX IF NOT EXISTS idx_rel_target ON relations(target_id);
 CREATE INDEX IF NOT EXISTS idx_alias_redirects_normalized ON alias_redirects(normalized);
 CREATE INDEX IF NOT EXISTS idx_dates_start ON entity_dates(year, date_value);
+CREATE INDEX IF NOT EXISTS idx_history_changed_at ON entity_history(changed_at DESC);
 """
 
 
@@ -184,8 +191,8 @@ def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO schema_meta(key, value) VALUES('migrated_from', '1')")
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path))
+def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:

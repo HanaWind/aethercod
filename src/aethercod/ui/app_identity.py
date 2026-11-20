@@ -4,8 +4,6 @@ import ctypes
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QIcon
-
 WINDOWS_APP_ID = "Aethercod.WorldbuildingDatabase"
 
 
@@ -19,7 +17,9 @@ def configure_process_identity() -> None:
         pass
 
 
-def application_icon() -> QIcon:
+def application_icon():
+    from PySide6.QtGui import QIcon
+
     resources = Path(__file__).resolve().parent.parent / "resources"
     for filename in ("aethercod.ico", "aethercod.png", "aethercod.svg"):
         path = resources / filename

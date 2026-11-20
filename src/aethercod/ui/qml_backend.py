@@ -25,12 +25,16 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QVBoxLayout
 
 from ..db import connect, is_builtin_field
 from ..exchange import backup_project, export_library, import_library, read_json, write_json
+from ..history import EntityHistory
 from ..models import Entity, new_uuid, validate_date_parts
+from ..repositories import atomic
 from ..services import ProjectService
+from .color_wheel import ColorWheel
 from .graph_view import GraphView
 
 
@@ -131,6 +135,7 @@ class QmlGraphModel(_ListModel):
         Qt.UserRole + 5: b"positionX",
         Qt.UserRole + 6: b"positionY",
         Qt.UserRole + 7: b"isCenter",
+        Qt.UserRole + 8: b"typeId",
     }
 
 
@@ -166,6 +171,18 @@ class QmlFieldModel(_ListModel):
     }
 
 
+class QmlHistoryModel(_ListModel):
+    roles = {
+        Qt.UserRole + 1: b"id",
+        Qt.UserRole + 2: b"entityId",
+        Qt.UserRole + 3: b"entityName",
+        Qt.UserRole + 4: b"version",
+        Qt.UserRole + 5: b"changedAt",
+        Qt.UserRole + 6: b"changeType",
+        Qt.UserRole + 7: b"description",
+    }
+
+
 class QmlBackend(QObject):
     """QObject facade exposed as ``backend`` to QML."""
 
@@ -179,10 +196,13 @@ class QmlBackend(QObject):
     graphChanged = Signal()
     validationChanged = Signal()
     fieldsChanged = Signal()
+    historyChanged = Signal()
     relationEditorChanged = Signal()
     projectChanged = Signal()
     statusChanged = Signal()
     themeChanged = Signal()
+    readOnlyChanged = Signal()
+    uiPreferencesChanged = Signal()
     dirtyChanged = Signal()
     typeFilterChanged = Signal()
     timelineFilterChanged = Signal()
@@ -208,12 +228,15 @@ class QmlBackend(QObject):
         self.validationModel = QmlValidationModel(self)
         self.relationTargetModel = QmlRelationTargetModel(self)
         self.fieldModel = QmlFieldModel(self)
+        self.historyModel = QmlHistoryModel(self)
         self._service: ProjectService | None = None
+        self._history: EntityHistory | None = None
         self._conn: Any = None
         self._path = ""
         self._project_meta = dict(self.DEFAULT_PROJECT_META)
         self._types: dict[str, str] = {}
         self._current: Entity | None = None
+        self._saved_entity_snapshot: dict[str, Any] | None = None
         self._current_is_new = False
         self._preview: Entity | None = None
         self._query = ""
@@ -221,8 +244,13 @@ class QmlBackend(QObject):
         self._timeline_type_filter = ""
         self._graph_scope = "all"
         self._dirty = False
-        settings = QSettings("Aethercod", "Aethercod")
-        self._dark = settings.value("ui/dark", False, type=bool)
+        self._read_only_mode = False
+        self._settings = QSettings("Aethercod", "Aethercod")
+        self._dark = self._settings.value("ui/dark", False, type=bool)
+        self._animations_enabled = self._settings.value("ui/animations", True, type=bool)
+        self._background_effects_enabled = self._settings.value("ui/backgroundEffects", True, type=bool)
+        self._compact_mode = self._settings.value("ui/compactMode", False, type=bool)
+        self._graph_motion_enabled = self._settings.value("ui/graphMotion", True, type=bool)
         self._status = "请选择一个项目文件"
         self._pending_action: tuple[str, str] | None = None
         self._relation_edit_id = ""
@@ -278,6 +306,10 @@ class QmlBackend(QObject):
     def fieldModelObject(self) -> QObject:
         return self.fieldModel
 
+    @Property(QObject, constant=True)
+    def historyModelObject(self) -> QObject:
+        return self.historyModel
+
     @Property(str, notify=projectChanged)
     def projectPath(self) -> str:
         return self._path
@@ -320,9 +352,66 @@ class QmlBackend(QObject):
     def hasProject(self) -> bool:
         return self._service is not None
 
-    @Property(bool, notify=projectChanged)
+    @Property(bool, notify=readOnlyChanged)
     def readOnly(self) -> bool:
-        return bool(self._service and not self._service.writable)
+        return self._read_only_mode or bool(self._service and not self._service.writable)
+
+    @Property(bool, notify=readOnlyChanged)
+    def readOnlyMode(self) -> bool:
+        return self._read_only_mode
+
+    @Property(bool, notify=projectChanged)
+    def projectWritable(self) -> bool:
+        return bool(self._service and self._service.writable)
+
+    @Property(int, notify=historyChanged)
+    def historyCount(self) -> int:
+        return len(self.historyModel._rows)
+
+    @Property(bool, notify=uiPreferencesChanged)
+    def animationsEnabled(self) -> bool:
+        return self._animations_enabled
+
+    @Property(bool, notify=uiPreferencesChanged)
+    def backgroundEffectsEnabled(self) -> bool:
+        return self._background_effects_enabled
+
+    @Property(bool, notify=uiPreferencesChanged)
+    def compactMode(self) -> bool:
+        return self._compact_mode
+
+    @Property(bool, notify=uiPreferencesChanged)
+    def graphMotionEnabled(self) -> bool:
+        return self._graph_motion_enabled
+
+    @Slot(bool, bool, bool, bool)
+    def setUIPreferences(
+        self,
+        animations_enabled: bool,
+        background_effects_enabled: bool,
+        compact_mode: bool,
+        graph_motion_enabled: bool,
+    ) -> None:
+        values = {
+            "ui/animations": bool(animations_enabled),
+            "ui/backgroundEffects": bool(background_effects_enabled),
+            "ui/compactMode": bool(compact_mode),
+            "ui/graphMotion": bool(graph_motion_enabled),
+        }
+        if (
+            self._animations_enabled == values["ui/animations"]
+            and self._background_effects_enabled == values["ui/backgroundEffects"]
+            and self._compact_mode == values["ui/compactMode"]
+            and self._graph_motion_enabled == values["ui/graphMotion"]
+        ):
+            return
+        self._animations_enabled = values["ui/animations"]
+        self._background_effects_enabled = values["ui/backgroundEffects"]
+        self._compact_mode = values["ui/compactMode"]
+        self._graph_motion_enabled = values["ui/graphMotion"]
+        for key, value in values.items():
+            self._settings.setValue(key, value)
+        self.uiPreferencesChanged.emit()
 
     @Property(str, notify=queryChanged)
     def query(self) -> str:
@@ -735,6 +824,33 @@ class QmlBackend(QObject):
         )
         self.validationChanged.emit()
 
+    def _reload_history(self) -> None:
+        if not self._conn:
+            self.historyModel.replace([])
+            self.historyChanged.emit()
+            return
+        rows = self._conn.execute(
+            """SELECT h.id,h.entity_id,COALESCE(e.name,'已删除词条') AS entity_name,
+                      h.version,h.changed_at,h.change_type,h.change_description
+               FROM entity_history h LEFT JOIN entities e ON e.id=h.entity_id
+               ORDER BY h.changed_at DESC,h.version DESC LIMIT 500"""
+        ).fetchall()
+        self.historyModel.replace(
+            [
+                {
+                    "id": row["id"],
+                    "entityId": row["entity_id"],
+                    "entityName": row["entity_name"],
+                    "version": row["version"],
+                    "changedAt": row["changed_at"],
+                    "changeType": row["change_type"],
+                    "description": row["change_description"],
+                }
+                for row in rows
+            ]
+        )
+        self.historyChanged.emit()
+
     def _graph_data(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if not self._service:
             return [], []
@@ -789,6 +905,7 @@ class QmlBackend(QObject):
                 {
                     "id": entity.id,
                     "name": entity.name,
+                    "type_id": entity.type_id,
                     "type_name": self._types.get(entity.type_id, entity.type_id),
                     "color": entity.color,
                     "x": x,
@@ -819,6 +936,7 @@ class QmlBackend(QObject):
                 {
                     "id": row["id"],
                     "name": row["name"],
+                    "typeId": row["type_id"],
                     "typeName": row["type_name"],
                     "nodeColor": row["color"],
                     "positionX": row["x"],
@@ -914,10 +1032,15 @@ class QmlBackend(QObject):
         try:
             new_conn = connect(path)
             new_service = ProjectService(new_conn)
+            new_history = EntityHistory(new_conn)
             old_conn = self._conn
             self._conn = new_conn
             self._service = new_service
+            self._history = new_history
             self._path = str(Path(path).expanduser().resolve())
+            self._read_only_mode = False
+            self._saved_entity_snapshot = None
+            self.readOnlyChanged.emit()
             self._load_project_meta()
             self._current = None
             self._current_is_new = False
@@ -943,6 +1066,7 @@ class QmlBackend(QObject):
             self._reload_validation()
             self._reload_relations()
             self._reload_graph()
+            self._reload_history()
             self._emit_current()
             self._set_status(f"已打开项目：{Path(self._path).name}")
             self.projectChanged.emit()
@@ -1074,6 +1198,17 @@ class QmlBackend(QObject):
             self._set_status(f"保存资料库设置失败：{exc}")
             return False
 
+    @Slot(bool)
+    def setReadOnlyMode(self, enabled: bool) -> None:
+        if not self.projectWritable:
+            return
+        enabled = bool(enabled)
+        if enabled == self._read_only_mode:
+            return
+        self._read_only_mode = enabled
+        self.readOnlyChanged.emit()
+        self._set_status("已启用只读模式" if enabled else "已恢复编辑模式")
+
     @Slot()
     def closeProject(self) -> None:
         if self._conn is not None:
@@ -1082,10 +1217,14 @@ class QmlBackend(QObject):
             except Exception:
                 pass
         self._service = None
+        self._history = None
         self._conn = None
         self._path = ""
+        self._read_only_mode = False
+        self.readOnlyChanged.emit()
         self._project_meta = dict(self.DEFAULT_PROJECT_META)
         self._current = None
+        self._saved_entity_snapshot = None
         self._current_is_new = False
         self._preview = None
         self._pending_action = None
@@ -1102,6 +1241,7 @@ class QmlBackend(QObject):
         self._reload_validation()
         self._reload_relations()
         self._reload_graph()
+        self._reload_history()
         self.projectChanged.emit()
         self._emit_current()
         self._set_status("资料库已关闭")
@@ -1181,6 +1321,7 @@ class QmlBackend(QObject):
             self._set_status("词条不存在或已被删除")
             return
         self._current = entity
+        self._saved_entity_snapshot = EntityHistory._entity_to_dict(entity)
         self._current_is_new = False
         self._set_dirty(False)
         self._emit_current()
@@ -1192,6 +1333,9 @@ class QmlBackend(QObject):
 
     @Slot()
     def newEntity(self) -> None:
+        if self.readOnly:
+            self._set_status("当前为只读模式，无法新建词条")
+            return
         if not self._service:
             self._set_status("请先打开项目")
             return
@@ -1202,7 +1346,7 @@ class QmlBackend(QObject):
         self._create_entity()
 
     def _create_entity(self) -> None:
-        if not self._service:
+        if not self._service or self.readOnly:
             return
         type_id = self._type_filter or next(iter(self._types), "")
         if not type_id:
@@ -1210,6 +1354,7 @@ class QmlBackend(QObject):
             return
         try:
             self._current = self._service.new_entity(type_id)
+            self._saved_entity_snapshot = None
             self._current_is_new = True
             self._set_dirty(True)
             self._emit_current()
@@ -1455,12 +1600,28 @@ class QmlBackend(QObject):
 
     @Slot(result=bool)
     def saveEntity(self) -> bool:
+        if self.readOnly:
+            self._set_status("当前为只读模式，无法保存词条")
+            return False
         if not self._service or not self._current:
             self._set_status("没有正在编辑的词条")
             return False
+        if not self._dirty and not self._current_is_new:
+            self._set_status("当前词条没有未保存修改")
+            return True
         try:
-            saved = self._service.save_entity(self._current)
+            change_type = "create" if self._current_is_new else "update"
+            description = self._describe_entity_change()
+            with atomic(self._conn):
+                saved = self._service.save_entity(self._current)
+                self._history.save_snapshot(
+                    saved,
+                    change_type,
+                    description,
+                    commit=False,
+                )
             self._current = saved
+            self._saved_entity_snapshot = EntityHistory._entity_to_dict(saved)
             self._current_is_new = False
             self._set_dirty(False)
             self._reload_entities()
@@ -1471,12 +1632,42 @@ class QmlBackend(QObject):
             self._reload_validation()
             self._reload_relations()
             self._reload_graph()
+            self._reload_history()
             self._emit_current()
             self._set_status(f"已保存：{saved.name}")
             return True
         except Exception as exc:
             self._set_status(f"保存失败：{exc}")
             return False
+
+    def _describe_entity_change(self) -> str:
+        if self._current_is_new:
+            return f"新建词条「{self._current.name}」"
+        before = self._saved_entity_snapshot or {}
+        after = EntityHistory._entity_to_dict(self._current)
+        field_labels = {
+            "type_id": "类型",
+            "name": "名称",
+            "summary": "简介",
+            "notes": "正文",
+            "color": "颜色",
+            "remarks": "备注",
+            "aliases": "别名",
+            "tags": "标签",
+            "dates": "纪年记录",
+        }
+        changed = [
+            label for key, label in field_labels.items() if before.get(key) != after.get(key)
+        ]
+        old_fields = before.get("custom_fields", {})
+        new_fields = after.get("custom_fields", {})
+        changed.extend(
+            f"属性「{name}」"
+            for name in dict.fromkeys((*old_fields.keys(), *new_fields.keys()))
+            if old_fields.get(name) != new_fields.get(name)
+        )
+        operation = "、".join(changed) if changed else "内容"
+        return f"更新词条「{self._current.name}」：{operation}"
 
     @Slot(result=bool)
     def deleteEntity(self) -> bool:
@@ -1746,8 +1937,28 @@ class QmlBackend(QObject):
     @Slot()
     def toggleTheme(self) -> None:
         self._dark = not self._dark
-        QSettings("Aethercod", "Aethercod").setValue("ui/dark", self._dark)
+        self._settings.setValue("ui/dark", self._dark)
         self.themeChanged.emit()
+
+    @Slot(str, result=str)
+    def chooseCustomColor(self, initial_color: str) -> str:
+        dialog = QDialog()
+        dialog.setWindowTitle("自定义词条颜色")
+        picker = ColorWheel(str(initial_color or "#7c3aed"), dialog)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("选择颜色")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(picker)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        return picker.color().name(QColor.NameFormat.HexRgb)
 
     @Slot()
     def closePreview(self) -> None:

@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from .bridge_api import BridgeAPI
+
+
+def run_webview() -> int:
+    import webview
+
+    api = BridgeAPI()
+    dev_url = os.environ.get("AETHERCOD_DEV_URL", "").strip()
+    frontend = Path(__file__).resolve().parents[1] / "frontend_dist" / "index.html"
+    if dev_url:
+        url = dev_url
+    elif frontend.is_file():
+        url = frontend.as_uri()
+    else:
+        raise FileNotFoundError(
+            "The Aethercod frontend is not built. Run `npm install` and `npm run build` in frontend/."
+        )
+
+    window = webview.create_window(
+        "Aethercod",
+        url=url,
+        js_api=api,
+        width=1440,
+        height=920,
+        min_size=(980, 640),
+        frameless=True,
+        easy_drag=False,
+        text_select=False,
+        background_color="#F4F6F9",
+    )
+    api.bind_window(window)
+    webview.start(debug=bool(dev_url), http_server=False, private_mode=False)
+    api.close_project()
+    return 0

@@ -2,7 +2,7 @@
 
 Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、时间和双向关系组织人物、地点、政权、事件、物品等设定，并将一个资料库完整保存在单个 `.aethercod` 文件中。
 
-当前桌面界面基于 **Qt Quick/QML**，Python 负责领域模型、SQLite 数据和导入导出。应用无需账户或在线服务，资料默认只保存在本机。
+桌面界面使用 **pywebview + React + TypeScript**，通过 pywebview `js_api` 直接调用 Python 桥接层。生产运行加载本地静态文件，不启动 HTTP 服务；领域模型、SQLite 数据库和既有 Python 服务保持不变。资料默认只保存在本机。
 
 ## 主要功能
 
@@ -79,18 +79,22 @@ Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、�
 
 ### 界面体验
 
-- 扁平化 QML 工作台，包含半透明面板和毛玻璃效果。
-- 日间与夜间主题覆盖主页面、编辑器、菜单、弹窗和提示信息。
-- 背景使用动态渐变和具有出现、移动、坍缩生命周期的粒子效果。
-- 按钮具有悬停、按下和禁用反馈；页面切换及弹窗打开、关闭均带过渡动画。
-- 应用窗口和任务栏使用 Aethercod 自有图标。
+- 默认浅色的三栏工作台，支持记忆深浅主题、分类独立折叠、动态主题色、关联跳转和反向引用。
+- 从左侧打开资料库设置、全库时间线和关系图谱。设置页可修改资料库信息、管理词条类型和自定义字段。
+- 标题栏可开启只读模式。浏览、搜索和跳转仍可使用，桥接层会拒绝项目写入。
+- 标题、摘要和 Markdown 正文采用阅读与编辑切换，修改后自动保存到当前 SQLite 资料库。
+- 类型自定义属性以网格方式展示，纪年节点呈现在词条时间线上。
+- `Ctrl+K` / `Cmd+K` 打开键盘可操作的全局搜索面板。
+- QML 和 QWidget 界面仍保留，可通过环境变量启动。
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.11 或更高版本
-- PySide6 6.7 或更高版本
+- pywebview 5.3 或更高版本
+- Node.js 20.19 或更高版本及 npm，用于构建前端静态资源
+- PySide6 6.7 或更高版本，仅用于运行兼容 Qt 界面和对应测试
 
 Windows PowerShell 示例：
 
@@ -98,13 +102,19 @@ Windows PowerShell 示例：
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+cd frontend
+npm install
+npm run build
+cd ..
 ```
 
-启动默认 QML 界面：
+启动桌面应用：
 
 ```powershell
 python -m aethercod
 ```
+
+只运行桌面前端时可安装 `aethercod` 本体依赖。`.[dev]` 会额外安装 Qt，用于测试和开发旧界面；只需兼容界面时可安装 `.[legacy-ui]`。
 
 安装后也可以使用：
 
@@ -114,14 +124,29 @@ aethercod
 aethercod-gui
 ```
 
-首次使用时，从左上角资料库菜单选择“新建资料库”，填写项目参数并选择保存位置。随后可以创建词条、添加日期和关系，再通过时间线及关系图检查设定之间的联系。
+首次使用时选择“创建资料库”，填写项目参数并选择保存位置。随后可以创建词条、编辑类型属性、添加日期和关系，再通过分类列表与搜索面板浏览设定。
+
+生产界面加载 `src/aethercod/frontend_dist/` 中的本地文件。开发界面可启动 Vite，然后在另一个终端中设置开发地址：
+
+```powershell
+cd frontend
+npm run dev
+```
+
+```powershell
+$env:AETHERCOD_DEV_URL = "http://127.0.0.1:5173"
+python -m aethercod
+```
 
 ### 兼容界面
 
-旧 QWidget 界面仍保留用于兼容和辅助迁移，但默认开发目标是 QML 工作台：
+旧 QML 与 QWidget 界面仍保留用于兼容和辅助迁移：
 
 ```powershell
 $env:AETHERCOD_UI = "widgets"
+python -m aethercod
+# 或使用旧 QML 工作台
+$env:AETHERCOD_UI = "qml"
 python -m aethercod
 ```
 
@@ -194,17 +219,20 @@ src/aethercod/
 ├── exchange.py             # JSON、Markdown 与数据库备份
 ├── resources/              # SVG、PNG 和 ICO 应用资源
 └── ui/
+    ├── webview_app.py      # pywebview 桌面窗口
+    ├── bridge_api.py       # pywebview js_api 与领域服务适配层
     ├── qml_app.py          # Qt Quick 应用初始化
-    ├── qml_backend.py      # QML 与 Python 数据层适配
-    ├── qml/Main.qml        # 默认工作台和全部 QML 页面
+    ├── qml_backend.py      # 兼容 QML 的数据层适配
+    ├── qml/Main.qml        # 兼容 QML 工作台
     ├── main_window.py      # 兼容 QWidget 界面
     ├── graph_view.py       # 兼容界面的关系图
     └── timeline_view.py    # 兼容界面的时间线
 
 tests/                      # 数据层、交换层和 Qt 界面测试
+frontend/                   # Vite、React、TypeScript 与 Tailwind CSS 工程
 ```
 
-QML 前端只通过 `QmlBackend` 暴露的属性、模型、信号和槽访问数据。SQLite schema、仓储和服务层不依赖具体界面，因此后续仍可替换或增加其他客户端。
+React 前端只通过 `BridgeAPI` 暴露的 pywebview `js_api` 调用数据层。SQLite schema、仓储和服务层不依赖具体界面。
 
 ## 开发与测试
 
@@ -231,8 +259,7 @@ python -m pytest -q
 
 ## 当前限制
 
-- QML 正文编辑器保存 Markdown 兼容文本和 `[[UUID]]` 引用，目前没有所见即所得编辑或完整的富文本预览。
-- 删除词条使用软删除保留数据，但当前 QML 工作台尚未提供回收站管理页面。
-- QML 可维护当前类型的属性定义；创建、重命名和删除词条类型仍只存在于兼容界面。
+- React 工作台尚未迁移数据校验、JSON 导入导出和备份界面，这些功能仍可从旧 QML 或 QWidget 界面使用。
+- 删除词条使用软删除保留数据，React 工作台尚未提供回收站管理页面。
 - 拖动后的关系图布局只在当前会话中生效，尚未写入项目文件。
 - 应用面向单机资料库，没有多人实时同步和权限系统。

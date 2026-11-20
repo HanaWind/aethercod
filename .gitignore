@@ -9,3 +9,6 @@ dist/
 build/
 *.aethercod
 migrate.md
+references/
+frontend/node_modules/
+HANDOFF.md

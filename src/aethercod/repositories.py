@@ -763,10 +763,10 @@ class EntityRepository:
             )
         return entity
 
-    def soft_delete(self, entity_id: str) -> None:
+    def soft_delete(self, entity_id: str, *, commit: bool = True) -> None:
         entity_id = normalize_uuid(entity_id)
         now = utc_now()
-        with self.conn:
+        with self.conn if commit else nullcontext():
             self.conn.execute(
                 "UPDATE entities SET deleted_at=?, updated_at=? WHERE id=?", (now, now, entity_id)
             )

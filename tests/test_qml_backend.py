@@ -6,7 +6,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt, QUrl
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QUrl
 from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -168,6 +168,69 @@ def test_project_metadata_persists_and_controls_calendar_labels(qml_backend, tmp
     assert backend.projectDescription == "第二版"
 
 
+def test_read_only_mode_blocks_entity_mutations(qml_backend, tmp_path):
+    backend = qml_backend
+    assert backend.openProject(str(tmp_path / "read-only.aethercod"))
+    backend.newEntity()
+    backend.setCurrentField("name", "Original entry")
+    assert backend.saveEntity()
+    entity_id = backend.currentEntityId
+
+    backend.setReadOnlyMode(True)
+    assert backend.readOnly
+    assert backend.readOnlyMode
+    backend.setCurrentField("name", "Changed entry")
+    backend.newEntity()
+    assert backend.currentName == "Original entry"
+    assert backend.currentEntityId == entity_id
+    assert not backend.saveEntity()
+    assert backend._service.entities.get(entity_id).name == "Original entry"
+
+    backend.setReadOnlyMode(False)
+    assert not backend.readOnly
+    backend.setCurrentField("name", "Changed entry")
+    assert backend.saveEntity()
+    assert backend._service.entities.get(entity_id).name == "Changed entry"
+
+
+def test_ui_preferences_can_be_changed_and_restored(qml_backend):
+    backend = qml_backend
+    original = (
+        backend.animationsEnabled,
+        backend.backgroundEffectsEnabled,
+        backend.compactMode,
+        backend.graphMotionEnabled,
+    )
+    backend.setUIPreferences(False, False, not original[2], False)
+    assert not backend.animationsEnabled
+    assert not backend.backgroundEffectsEnabled
+    assert backend.compactMode is (not original[2])
+    assert not backend.graphMotionEnabled
+    backend.setUIPreferences(*original)
+
+
+def test_entity_edits_create_persistent_history_records(qml_backend, tmp_path):
+    backend = qml_backend
+    project_path = tmp_path / "entity-history.aethercod"
+    assert backend.openProject(str(project_path))
+    backend.newEntity()
+    backend.setCurrentField("name", "Moon Archivist")
+    assert backend.saveEntity()
+    assert backend.historyCount == 1
+
+    backend.setCurrentField("summary", "Keeps the lunar records.")
+    assert backend.saveEntity()
+    assert backend.historyCount == 2
+    latest = backend.historyModel._rows[0]
+    assert latest["entityName"] == "Moon Archivist"
+    assert latest["description"] == "更新词条「Moon Archivist」：简介"
+    assert latest["changedAt"]
+
+    backend.closeProject()
+    assert backend.openProject(str(project_path))
+    assert backend.historyCount == 2
+
+
 def test_graph_export_without_selection_and_backup_source_guard(qml_backend, tmp_path, monkeypatch):
     backend = qml_backend
     project_path = tmp_path / "archive.aethercod"
@@ -228,6 +291,9 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
     assert backend.saveFieldDefinition("", "Home", "entity_ref", False, "Home location", "")
     backend.setCustomFieldValue("Home", f'"{target_id}"')
     assert backend.saveEntity()
+    assert backend.saveFieldDefinition(
+        "", "Disposition", "choice", False, "Role in the northern court", "Courier, Diplomat"
+    )
     assert backend.currentTypeId == entity_type
 
     QQuickStyle.setStyle("Basic")
@@ -242,6 +308,34 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
     QApplication.instance().processEvents()
     assert engine.rootObjects()
     root = engine.rootObjects()[0]
+    root_context = engine.contextForObject(root)
+    repeater_expression = QQmlExpression(root_context, root, "fieldRepeater")
+    field_repeater, undefined = repeater_expression.evaluate()
+    assert not repeater_expression.hasError(), repeater_expression.error().toString()
+    assert not undefined and field_repeater is not None
+    choice_delegate = None
+    for index in range(int(field_repeater.property("count"))):
+        delegate_expression = QQmlExpression(
+            root_context, root, f"fieldRepeater.itemAt({index})"
+        )
+        delegate, undefined = delegate_expression.evaluate()
+        if not undefined and delegate.property("fieldType") == "choice":
+            choice_delegate = delegate
+            break
+    assert choice_delegate is not None
+    choice_context = engine.contextForObject(choice_delegate)
+    choice_popup_expression = QQmlExpression(
+        choice_context, choice_delegate, "fieldChoiceCombo.popup.open()"
+    )
+    choice_popup_expression.evaluate()
+    assert not choice_popup_expression.hasError(), choice_popup_expression.error().toString()
+    QTest.qWait(40)
+    choice_close_expression = QQmlExpression(
+        choice_context, choice_delegate, "fieldChoiceCombo.popup.close()"
+    )
+    choice_close_expression.evaluate()
+    assert not choice_close_expression.hasError(), choice_close_expression.error().toString()
+    QTest.qWait(40)
     root.setProperty("page", "timeline")
     QTest.qWait(100)
     context = engine.contextForObject(root)
@@ -273,6 +367,8 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         "timelineTypeFilter.popup.close()",
         "timelineViewport.zoomAt(1.8, timelineViewport.width / 2)",
         "root.page = 'entries'",
+        "typeCombo.popup.open()",
+        "typeCombo.popup.close()",
         "fieldDefinitionDialog.open()",
         "fieldTypeCombo.popup.open()",
         "fieldTypeCombo.popup.close()",
@@ -286,6 +382,7 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         "relationTarget.popup.open()",
         "relationTarget.popup.close()",
         "relationDialog.close()",
+        "root.page = 'history'",
         "root.page = 'graph'",
         "root.page = 'validation'",
         "root.showProjectSettings()",
@@ -294,6 +391,18 @@ def test_qml_typed_properties_are_generic_and_the_qml_screen_loads(qml_backend, 
         evaluation.evaluate()
         assert not evaluation.hasError(), evaluation.error().toString()
         QTest.qWait(20)
+    backend.setReadOnlyMode(True)
+    root.setProperty("page", "entries")
+    QTest.qWait(50)
+    for expression, expected in (
+        ("structuredReader.visible", True),
+        ("entityEditorScroll.visible", False),
+    ):
+        evaluation = QQmlExpression(context, root, expression)
+        value, undefined = evaluation.evaluate()
+        assert not evaluation.hasError(), evaluation.error().toString()
+        assert not undefined and value is expected
+    backend.setReadOnlyMode(False)
     root.setProperty("page", "graph")
     QTest.qWait(80)
     graph_node_expression = QQmlExpression(context, root, "graphRepeater.itemAt(0)")
