@@ -12,12 +12,24 @@ from typing import Any, Callable, TypeVar
 
 from ..db import connect, is_builtin_field
 from ..history import EntityHistory
-from ..models import Entity
+from ..models import Entity, utc_now
 from ..repositories import atomic, normalize
 from ..services import ProjectService
 
 _T = TypeVar("_T")
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+_ENTITY_CHANGE_LABELS = {
+    "name": "名称",
+    "summary": "摘要",
+    "notes": "正文",
+    "color": "主题色",
+    "remarks": "备注",
+    "aliases": "别名",
+    "tags": "分类",
+    "dates": "日期",
+    "type_id": "词条类型",
+}
 
 
 def _serialized(method: Callable[..., _T]) -> Callable[..., _T]:
@@ -117,6 +129,71 @@ class BridgeAPI:
     @staticmethod
     def _entity_dict(entity: Entity) -> dict[str, Any]:
         return asdict(entity)
+
+    @staticmethod
+    def _change_value(value: Any) -> str:
+        rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return rendered if len(rendered) <= 48 else f"{rendered[:45]}..."
+
+    def _entity_change_description(self, before: Entity | None, after: Entity) -> str:
+        if before is None:
+            return f"新建词条「{after.name}」"
+        old_values = self._entity_dict(before)
+        new_values = self._entity_dict(after)
+        changes = []
+        for key, label in _ENTITY_CHANGE_LABELS.items():
+            old_value, new_value = old_values.get(key), new_values.get(key)
+            if old_value != new_value:
+                changes.append(
+                    f"{label}「{self._change_value(old_value)}」→「{self._change_value(new_value)}」"
+                )
+        old_fields = before.custom_fields
+        new_fields = after.custom_fields
+        for field_name in dict.fromkeys((*old_fields, *new_fields)):
+            old_value = old_fields.get(field_name)
+            new_value = new_fields.get(field_name)
+            if old_value != new_value or (field_name in old_fields) != (field_name in new_fields):
+                changes.append(
+                    f"属性「{field_name}」「{self._change_value(old_value)}」→「{self._change_value(new_value)}」"
+                )
+        return f"更新「{after.name}」：" + ("、".join(changes) or "词条属性")
+
+    def _relation_snapshot(self, entity_id: str) -> list[dict[str, Any]]:
+        assert self._conn is not None
+        return [
+            dict(row)
+            for row in self._conn.execute(
+                "SELECT id,source_id,target_id,label,reverse_label,notes,created_at "
+                "FROM relations WHERE source_id=? OR target_id=? ORDER BY created_at,id",
+                (entity_id, entity_id),
+            ).fetchall()
+        ]
+
+    def _save_entity_snapshot(
+        self,
+        entity: Entity,
+        change_type: str,
+        description: str,
+        *,
+        commit: bool = False,
+    ) -> None:
+        assert self._conn is not None and self._history is not None
+        self._history.save_snapshot(entity, change_type, description, commit=commit)
+        snapshot = self._history.get_version(
+            entity.id,
+            self._history._get_next_version(entity.id) - 1,
+        )
+        if snapshot is None:
+            raise RuntimeError("Unable to read the saved history snapshot")
+        snapshot["relations"] = self._relation_snapshot(entity.id)
+        self._conn.execute(
+            "UPDATE entity_history SET snapshot=? WHERE entity_id=? AND version=?",
+            (
+                json.dumps(snapshot, ensure_ascii=False),
+                entity.id,
+                self._history._get_next_version(entity.id) - 1,
+            ),
+        )
 
     @_serialized
     def get_state(self) -> dict[str, Any]:
@@ -271,9 +348,9 @@ class BridgeAPI:
         ]
 
     @_serialized
-    def get_entity(self, entity_id: str) -> dict[str, Any] | None:
+    def get_entity(self, entity_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
         service = self._require_service()
-        entity = service.entities.get(str(entity_id), include_deleted=False)
+        entity = service.entities.get(str(entity_id), include_deleted=include_deleted)
         if entity is None:
             return None
         data = self._entity_dict(entity)
@@ -360,11 +437,10 @@ class BridgeAPI:
         with atomic(self._conn):
             saved = service.save_entity(entity, data.get("redirects"))
             if changed:
-                history.save_snapshot(
+                self._save_entity_snapshot(
                     saved,
                     change_type,
-                    f"{'新建' if change_type == 'create' else '更新'}词条「{saved.name}」",
-                    commit=False,
+                    self._entity_change_description(existing, saved),
                 )
         return self.get_entity(saved.id) or self._entity_dict(saved)
 
@@ -379,9 +455,7 @@ class BridgeAPI:
             service.entities.soft_delete(entity.id, commit=False)
             deleted = service.entities.get(entity.id)
             if deleted is not None:
-                self._history.save_snapshot(
-                    deleted, "delete", f"删除词条「{deleted.name}」", commit=False
-                )
+                self._save_entity_snapshot(deleted, "delete", f"移入回收站「{deleted.name}」")
         return True
 
     @_serialized
@@ -457,29 +531,114 @@ class BridgeAPI:
     def save_relation(self, data: dict[str, Any]) -> dict[str, Any]:
         service = self._ensure_writable()
         relation_id = str(data.get("id", "")).strip()
-        if relation_id:
-            relation = service.relations.update(
-                relation_id,
-                source_id=data.get("source_id"),
-                target_id=data.get("target_id"),
-                label=data.get("label"),
-                reverse_label=data.get("reverse_label"),
-                notes=data.get("notes"),
+        old_relation = service.relations.get(relation_id) if relation_id else None
+        old_source = service.entities.get(old_relation.source_id) if old_relation else None
+        old_target = service.entities.get(old_relation.target_id) if old_relation else None
+        affected_ids = {
+            entity_id
+            for entity_id in (
+                data.get("source_id"),
+                data.get("target_id"),
+                old_relation.source_id if old_relation else None,
+                old_relation.target_id if old_relation else None,
             )
-        else:
-            relation = service.new_relation(
-                str(data.get("source_id", "")),
-                str(data.get("target_id", "")),
-                str(data.get("label", "")),
-                str(data.get("reverse_label", "")),
-                str(data.get("notes", "")),
-            )
+            if entity_id
+        }
+        before = {entity_id: service.entities.get(entity_id) for entity_id in affected_ids}
+        assert self._conn is not None
+        with atomic(self._conn):
+            if relation_id:
+                relation = service.relations.update(
+                    relation_id,
+                    source_id=data.get("source_id"),
+                    target_id=data.get("target_id"),
+                    label=data.get("label"),
+                    reverse_label=data.get("reverse_label"),
+                    notes=data.get("notes"),
+                    commit=False,
+                )
+            else:
+                relation = service.new_relation(
+                    str(data.get("source_id", "")),
+                    str(data.get("target_id", "")),
+                    str(data.get("label", "")),
+                    str(data.get("reverse_label", "")),
+                    str(data.get("notes", "")),
+                    commit=False,
+                )
+            source = service.entities.get(relation.source_id)
+            target = service.entities.get(relation.target_id)
+            if old_relation:
+                relation_changes = []
+                for label, old_value, new_value in (
+                    (
+                        "起点",
+                        old_source.name if old_source else "已删除词条",
+                        source.name if source else "已删除词条",
+                    ),
+                    ("关系名称", old_relation.label, relation.label),
+                    (
+                        "终点",
+                        old_target.name if old_target else "已删除词条",
+                        target.name if target else "已删除词条",
+                    ),
+                    ("反向关系", old_relation.reverse_label, relation.reverse_label),
+                    ("备注", old_relation.notes, relation.notes),
+                ):
+                    if old_value != new_value:
+                        relation_changes.append(
+                            f"{label}「{self._change_value(old_value)}」"
+                            f"→「{self._change_value(new_value)}」"
+                        )
+                description = "更新关联：" + ("、".join(relation_changes) or "关联属性")
+            else:
+                description_parts = [
+                    f"新增关联：{source.name if source else '已删除词条'} — "
+                    f"{relation.label} → {target.name if target else '已删除词条'}"
+                ]
+                if relation.reverse_label:
+                    description_parts.append(f"反向关系「{relation.reverse_label}」")
+                if relation.notes:
+                    description_parts.append(f"备注「{self._change_value(relation.notes)}」")
+                description = "；".join(description_parts)
+            for entity_id in affected_ids:
+                entity = service.entities.get(entity_id, include_deleted=False)
+                previous = before.get(entity_id)
+                if entity and previous:
+                    self._save_entity_snapshot(
+                        entity,
+                        "relation",
+                        description,
+                    )
         return asdict(relation)
 
     @_serialized
     def delete_relation(self, relation_id: str) -> bool:
         service = self._ensure_writable()
-        service.relations.delete(str(relation_id))
+        relation = service.relations.get(str(relation_id))
+        if relation is None:
+            return False
+        before = {
+            entity_id: service.entities.get(entity_id)
+            for entity_id in {relation.source_id, relation.target_id}
+        }
+        assert self._conn is not None
+        source = service.entities.get(relation.source_id)
+        target = service.entities.get(relation.target_id)
+        description = (
+            f"删除关联：{source.name if source else '已删除词条'} — "
+            f"{relation.label} → {target.name if target else '已删除词条'}"
+        )
+        with atomic(self._conn):
+            service.relations.delete(relation.id, commit=False)
+            for entity_id, previous in before.items():
+                entity = service.entities.get(entity_id, include_deleted=False)
+                if entity and previous:
+                    self._save_entity_snapshot(
+                        entity,
+                        "relation",
+                        description,
+                    )
         return True
 
     @_serialized
@@ -522,4 +681,49 @@ class BridgeAPI:
         if self._history is None:
             self._require_service()
         assert self._history is not None
-        return self._history.get_history(str(entity_id))
+        return self._history.get_history(str(entity_id), limit=None)
+
+    @_serialized
+    def restore_entity_version(self, entity_id: str, version: int) -> dict[str, Any]:
+        service = self._ensure_writable()
+        if self._history is None or self._conn is None:
+            raise RuntimeError("No project is open")
+        snapshot = self._history.get_version(str(entity_id), int(version))
+        if snapshot is None:
+            raise ValueError("历史版本不存在")
+        entity = self._history._dict_to_entity(snapshot)
+        entity.deleted_at = snapshot.get("deleted_at")
+        desired_relations = snapshot.get("relations", [])
+        with atomic(self._conn):
+            if "relations" in snapshot:
+                self._conn.execute(
+                    "DELETE FROM relations WHERE source_id=? OR target_id=?",
+                    (entity.id, entity.id),
+                )
+            service.save_entity(entity)
+            for relation in desired_relations:
+                source = service.entities.get(relation["source_id"])
+                target = service.entities.get(relation["target_id"])
+                if source is None or target is None:
+                    raise ValueError("历史关联引用的词条不存在")
+                self._conn.execute(
+                    "INSERT INTO relations(id,source_id,target_id,label,reverse_label,notes,created_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (
+                        relation["id"],
+                        relation["source_id"],
+                        relation["target_id"],
+                        relation["label"],
+                        relation.get("reverse_label", ""),
+                        relation.get("notes", ""),
+                        relation.get("created_at", utc_now()),
+                    ),
+                )
+            restored = service.entities.get(entity.id, include_deleted=True)
+            assert restored is not None
+            self._save_entity_snapshot(
+                restored,
+                "restore",
+                f"恢复到历史版本 {int(version)}：{restored.name}",
+            )
+        return self.get_entity(entity.id, include_deleted=True) or self._entity_dict(restored)

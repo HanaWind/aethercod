@@ -81,6 +81,15 @@ export type ProjectState = {
   read_only: boolean;
 };
 
+export type HistoryEntry = {
+  id: string;
+  version: number;
+  changed_by: string;
+  changed_at: string;
+  change_type: string;
+  description: string;
+};
+
 export type GraphNode = EntitySummary & {
   x: number;
   y: number;
@@ -155,8 +164,9 @@ export type BridgeApi = {
   ): Promise<Relation>;
   delete_relation(relation_id: string): Promise<boolean>;
   get_timeline(entity_id?: string): Promise<TimelineEntry[]>;
+  get_history(entity_id: string): Promise<HistoryEntry[]>;
+  restore_entity_version(entity_id: string, version: number): Promise<Entity>;
   get_graph(): Promise<GraphData>;
-  get_history(entity_id: string): Promise<Array<Record<string, unknown>>>;
   window_action(
     action: "minimize" | "maximize" | "restore" | "close",
   ): Promise<void>;

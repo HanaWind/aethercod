@@ -13,6 +13,7 @@ import {
   FilePlus2,
   FolderOpen,
   Gem,
+  History,
   Link2,
   LockKeyhole,
   Maximize2,
@@ -41,6 +42,7 @@ import {
   type EntityType,
   type FieldDefinition,
   type GraphData,
+  type HistoryEntry,
   type ProjectState,
   type TimelineEntry,
 } from "./api";
@@ -50,6 +52,8 @@ import { formatWorldDate } from "./worldDate";
 import GraphView from "./GraphView";
 import SettingsView from "./SettingsView";
 import TimelineView from "./TimelineView";
+import ElasticScroll from "./ElasticScroll";
+import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
 
 const TYPE_ICONS: Record<string, typeof UserRound> = {
   person: UserRound,
@@ -64,7 +68,7 @@ const TYPE_ICONS: Record<string, typeof UserRound> = {
 };
 
 function TypeIcon({ type, size = 15 }: { type: EntityType; size?: number }) {
-  const Icon = TYPE_ICONS[type.id] ?? Sparkles;
+  const Icon = getTypeIcon(type.icon) ?? TYPE_ICONS[type.id] ?? Sparkles;
   return <Icon size={size} strokeWidth={1.7} />;
 }
 
@@ -108,6 +112,12 @@ function Workspace() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  const [typeCreateOpen, setTypeCreateOpen] = useState(false);
+  const [typeCreateValues, setTypeCreateValues] = useState({
+    name: "",
+    icon: "Sparkles",
+  });
+  const [typeCreateSubmitting, setTypeCreateSubmitting] = useState(false);
   const [createValues, setCreateValues] = useState({
     name: "",
     era_name: "泰拉纪元",
@@ -117,6 +127,10 @@ function Workspace() {
   const [error, setError] = useState("");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [globalTimeline, setGlobalTimeline] = useState<TimelineEntry[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [categoryEditing, setCategoryEditing] = useState(false);
+  const [categoryDraft, setCategoryDraft] = useState("");
   const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [] });
   const [contextMenu, setContextMenu] = useState<{
     kind: "type" | "entity" | "library";
@@ -135,6 +149,7 @@ function Workspace() {
   const revisionRef = useRef(0);
   const projectPath = useRef<string | undefined>(undefined);
   const entityRequest = useRef(0);
+  const historyEntity = useRef("");
   const pendingDraft = useRef<{ entity: Entity; version: number } | null>(null);
   const pendingSave = useRef<{
     promise: Promise<void>;
@@ -161,6 +176,8 @@ function Workspace() {
       setTimeline([]);
       setGlobalTimeline([]);
       setGraph({ nodes: [], edges: [] });
+      setHistory([]);
+      historyEntity.current = "";
       setActiveView("entries");
     }
   }, []);
@@ -188,8 +205,11 @@ function Workspace() {
     const api = desktopApi();
     if (!api) return;
     const request = ++entityRequest.current;
-    const entity = await api.get_entity(id);
-    const events = entity ? await api.get_timeline(id) : [];
+    const [entity, events, versions] = await Promise.all([
+      api.get_entity(id),
+      api.get_timeline(id),
+      api.get_history(id),
+    ]);
     if (request !== entityRequest.current) return;
     if (reveal) setActiveView("entries");
     setSelectedId(id);
@@ -202,6 +222,8 @@ function Workspace() {
     setDirty(false);
     setShowRelationForm(false);
     setTimeline(events);
+    setHistory(versions);
+    historyEntity.current = id;
   }, []);
 
   const flushDraft = useCallback(async () => {
@@ -214,7 +236,7 @@ function Workspace() {
         setSaving(true);
         const promise = api
           .save_entity(change.entity)
-          .then((saved) => {
+          .then(async (saved) => {
             if (projectPath.current !== path) return;
             setState((current) => ({
               ...current,
@@ -244,6 +266,8 @@ function Workspace() {
               );
             }
             setError("");
+            if (historyEntity.current === saved.id)
+              setHistory(await api.get_history(saved.id));
           })
           .finally(() => {
             pendingSave.current = null;
@@ -304,6 +328,17 @@ function Workspace() {
     }
   };
 
+  const restoreVersion = async (version: number) => {
+    const api = desktopApi();
+    if (!api || !state.writable || !draft || !(await flushDraft())) return;
+    try {
+      await api.restore_entity_version(draft.id, version);
+      await refreshProject();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   const openContextMenu = (
     event: React.MouseEvent,
     kind: "type" | "entity" | "library",
@@ -312,18 +347,22 @@ function Workspace() {
     event.preventDefault();
     event.stopPropagation();
     const bounds = event.currentTarget.getBoundingClientRect();
-    setContextMenu({
-      kind,
-      id,
-      x: Math.min(
-        event.type === "contextmenu" ? event.clientX : bounds.left,
-        window.innerWidth - 205,
-      ),
-      y: Math.min(
-        event.type === "contextmenu" ? event.clientY : bounds.bottom + 4,
-        window.innerHeight - 155,
-      ),
-    });
+    setContextMenu((current) =>
+      current?.kind === kind && current.id === id
+        ? null
+        : {
+            kind,
+            id,
+            x: Math.min(
+              event.type === "contextmenu" ? event.clientX : bounds.left,
+              window.innerWidth - 205,
+            ),
+            y: Math.min(
+              event.type === "contextmenu" ? event.clientY : bounds.bottom + 4,
+              window.innerHeight - 155,
+            ),
+          },
+    );
   };
 
   const renameType = async (typeId: string) => {
@@ -345,15 +384,26 @@ function Workspace() {
 
   const createType = async () => {
     if (!state.writable || !(await flushDraft())) return;
-    const name = await actionDialog({
-      title: "新建词条类型",
-      initialValue: "",
-      confirmLabel: "创建",
-    });
-    if (!name) return;
+    setTypeCreateValues({ name: "", icon: "Sparkles" });
+    setTypeCreateOpen(true);
+  };
+
+  const submitCreateType = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (
+      !state.writable ||
+      typeCreateSubmitting ||
+      !typeCreateValues.name.trim()
+    )
+      return;
+    setTypeCreateSubmitting(true);
     try {
-      const created = await desktopApi()?.create_type(name);
+      const created = await desktopApi()?.create_type(
+        typeCreateValues.name.trim(),
+        typeCreateValues.icon,
+      );
       if (created) {
+        setTypeCreateOpen(false);
         await refreshProject();
         setSettingsTab("types");
         setSettingsTypeId(created.id);
@@ -361,6 +411,8 @@ function Workspace() {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setTypeCreateSubmitting(false);
     }
   };
 
@@ -435,6 +487,7 @@ function Workspace() {
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
         setCreateOpen(false);
+        setTypeCreateOpen(false);
         setContextMenu(null);
       }
     };
@@ -525,6 +578,20 @@ function Workspace() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
+  };
+
+  const promptForProject = () =>
+    void actionDialog({
+      title: "需要打开资料库",
+      message: "请先新建或打开一个资料库后再访问此功能。",
+      confirmLabel: "知道了",
+    });
+
+  const switchTheme = () => {
+    const shell = document.querySelector(".app-shell");
+    shell?.classList.add("theme-transition");
+    setTheme((current) => (current === "light" ? "dark" : "light"));
+    window.setTimeout(() => shell?.classList.remove("theme-transition"), 340);
   };
 
   const createProject = async (event: React.FormEvent) => {
@@ -696,7 +763,7 @@ function Workspace() {
           />
         ))}
       </div>
-      <header className="titlebar">
+      <header className="titlebar pywebview-drag-region">
         <div className="brand-lockup pywebview-drag-region">
           <div className="brand-mark">
             <Sparkles size={17} />
@@ -707,7 +774,7 @@ function Workspace() {
             {state.project?.name ?? "世界观典籍"}
           </span>
         </div>
-        <div className="titlebar-actions">
+        <div className="titlebar-actions no-drag">
           <div className={`save-indicator ${saving ? "is-saving" : ""}`}>
             <span />
             {saving
@@ -731,9 +798,7 @@ function Workspace() {
           <button
             className="icon-button theme-toggle"
             title={theme === "light" ? "切换到深色主题" : "切换到浅色主题"}
-            onClick={() =>
-              setTheme((current) => (current === "light" ? "dark" : "light"))
-            }
+            onClick={switchTheme}
           >
             {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
           </button>
@@ -820,6 +885,21 @@ function Workspace() {
                     <FilePlus2 size={14} />
                     新建
                   </button>
+                  <button
+                    className="subtle-action workspace-settings-action"
+                    onClick={() => {
+                      if (!state.project) {
+                        promptForProject();
+                        return;
+                      }
+                      setSettingsTypeId("");
+                      setSettingsTab("library");
+                      void navigateTo("settings");
+                    }}
+                  >
+                    <Settings2 size={14} />
+                    设置
+                  </button>
                 </div>
                 <nav className="workspace-nav" aria-label="工作区">
                   <button
@@ -831,31 +911,27 @@ function Workspace() {
                   </button>
                   <button
                     className={activeView === "timeline" ? "active" : ""}
-                    disabled={!state.project}
-                    onClick={() => void navigateTo("timeline")}
+                    aria-disabled={!state.project}
+                    onClick={() =>
+                      state.project
+                        ? void navigateTo("timeline")
+                        : promptForProject()
+                    }
                   >
                     <CalendarDays size={15} />
                     时间线
                   </button>
                   <button
                     className={activeView === "graph" ? "active" : ""}
-                    disabled={!state.project}
-                    onClick={() => void navigateTo("graph")}
+                    aria-disabled={!state.project}
+                    onClick={() =>
+                      state.project
+                        ? void navigateTo("graph")
+                        : promptForProject()
+                    }
                   >
                     <Network size={15} />
                     关系图谱
-                  </button>
-                  <button
-                    className={activeView === "settings" ? "active" : ""}
-                    disabled={!state.project}
-                    onClick={() => {
-                      setSettingsTypeId("");
-                      setSettingsTab("library");
-                      void navigateTo("settings");
-                    }}
-                  >
-                    <Settings2 size={15} />
-                    资料库设置
                   </button>
                 </nav>
               </div>
@@ -889,7 +965,7 @@ function Workspace() {
                   </button>
                 </div>
               </div>
-              <div className="type-list">
+              <ElasticScroll className="type-list">
                 <LayoutGroup id="entity-navigation">
                   {state.types.map((type) => {
                     const entries = state.entities.filter(
@@ -1028,7 +1104,7 @@ function Workspace() {
                     打开或创建资料库以浏览词条
                   </div>
                 )}
-              </div>
+              </ElasticScroll>
 
               <div className="sidebar-bottom">
                 <div className="library-count">
@@ -1202,7 +1278,7 @@ function Workspace() {
               <p>从左侧分类中打开一条设定，或创建新词条。</p>
             </section>
           ) : (
-            <div className="document-scroll">
+            <ElasticScroll className="document-scroll">
               <AnimatePresence mode="wait" initial={false}>
                 <motion.article
                   key={draft.id}
@@ -1237,7 +1313,48 @@ function Workspace() {
                         {draft.type?.name}
                       </span>
                       <span className="eyebrow-dot">·</span>
-                      <span>{draft.tags?.join(" · ") || "未分类"}</span>
+                      {categoryEditing && state.writable ? (
+                        <input
+                          className="category-input"
+                          autoFocus
+                          aria-label="词条分类"
+                          value={categoryDraft}
+                          placeholder="添加分类"
+                          onChange={(event) =>
+                            setCategoryDraft(event.target.value)
+                          }
+                          onBlur={() => {
+                            setCategoryEditing(false);
+                            const tags = categoryDraft
+                              .split(/[，,]/)
+                              .map((item) => item.trim())
+                              .filter(Boolean);
+                            if (tags.join("\0") !== draft.tags.join("\0"))
+                              updateDraft((current) => ({ ...current, tags }));
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter")
+                              event.currentTarget.blur();
+                            if (event.key === "Escape") {
+                              setCategoryDraft(draft.tags.join("，"));
+                              event.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      ) : (
+                        <button
+                          className={`category-label ${draft.tags.length ? "" : "empty"}`}
+                          title={state.writable ? "编辑分类" : "词条分类"}
+                          onClick={() => {
+                            if (!state.writable) return;
+                            setCategoryDraft(draft.tags.join("，"));
+                            setCategoryEditing(true);
+                          }}
+                        >
+                          {draft.tags.join(" · ") ||
+                            (state.writable ? "+ 添加分类" : "尚未设置分类")}
+                        </button>
+                      )}
                     </div>
                     <EditableText
                       key={`${draft.id}-name`}
@@ -1283,25 +1400,6 @@ function Workspace() {
                         disabled={!state.writable}
                       />
                     </div>
-                    <div className="metadata-line">
-                      <span>标签</span>
-                      <input
-                        className="inline-input"
-                        value={draft.tags.join("，")}
-                        onChange={(event) =>
-                          updateDraft((current) => ({
-                            ...current,
-                            tags: event.target.value
-                              .split(/[，,]/)
-                              .map((item) => item.trim())
-                              .filter(Boolean),
-                          }))
-                        }
-                        placeholder="添加标签"
-                        disabled={!state.writable}
-                      />
-                    </div>
-
                     {Boolean(draft.fields?.length) && (
                       <section className="document-section properties-section">
                         <div className="section-heading">
@@ -1598,7 +1696,7 @@ function Workspace() {
                   </div>
                 </motion.article>
               </AnimatePresence>
-            </div>
+            </ElasticScroll>
           )}
         </main>
 
@@ -1656,6 +1754,54 @@ function Workspace() {
                       <p className="inspector-empty">没有词条引用此处</p>
                     )}
                   </div>
+                </section>
+                <section className="inspector-section history-section">
+                  <button
+                    className="inspector-heading history-heading"
+                    aria-expanded={historyOpen}
+                    onClick={() => setHistoryOpen((open) => !open)}
+                  >
+                    <History size={14} />
+                    <span>编辑历史</span>
+                    <span className="count-badge">{history.length}</span>
+                    <ChevronDown size={13} />
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {historyOpen && (
+                      <motion.div
+                        className="history-list"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ type: "spring", stiffness: 340, damping: 34 }}
+                      >
+                        {history.map((entry) => (
+                          <button
+                            className="history-entry"
+                            key={entry.id}
+                            disabled={!state.writable}
+                            title={
+                              state.writable
+                                ? `回退到版本 ${entry.version}`
+                                : "只读模式下无法回退历史版本"
+                            }
+                            onClick={() => void restoreVersion(entry.version)}
+                          >
+                            <span className="history-entry-top">
+                              <strong>版本 {entry.version}</strong>
+                              <time>{formatTimestamp(entry.changed_at)}</time>
+                            </span>
+                            <span className="history-description">
+                              {entry.description || entry.change_type}
+                            </span>
+                          </button>
+                        ))}
+                        {!history.length && (
+                          <p className="inspector-empty">暂无编辑记录</p>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </section>
                 <section className="inspector-section">
                   <div className="inspector-heading">
@@ -1921,6 +2067,83 @@ function Workspace() {
                 </span>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {typeCreateOpen && (
+          <motion.div
+            className="modal-scrim"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={() => setTypeCreateOpen(false)}
+          >
+            <motion.form
+              className="create-dialog"
+              onSubmit={(event) => void submitCreateType(event)}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="dialog-heading">
+                <div>
+                  <span className="section-kicker">词条结构</span>
+                  <h2>新建词条类型</h2>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="关闭"
+                  onClick={() => setTypeCreateOpen(false)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                类型名称
+                <input
+                  autoFocus
+                  value={typeCreateValues.name}
+                  onChange={(event) =>
+                    setTypeCreateValues((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="例如：魔法体系"
+                  required
+                />
+              </label>
+              <label className="type-create-icon-field">
+                类型图标
+                <TypeIconPicker
+                  value={typeCreateValues.icon}
+                  onChange={(icon) =>
+                    setTypeCreateValues((current) => ({ ...current, icon }))
+                  }
+                />
+              </label>
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setTypeCreateOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={typeCreateSubmitting}
+                >
+                  <Plus size={15} />
+                  {typeCreateSubmitting ? "创建中" : "创建类型"}
+                </button>
+              </div>
+            </motion.form>
           </motion.div>
         )}
       </AnimatePresence>
@@ -2274,6 +2497,10 @@ function formatDate(value: string) {
         day: "numeric",
         year: "numeric",
       }).format(date);
+}
+
+function formatTimestamp(value: string) {
+  return value.replace("T", " ").replace(/\+00:00$/, " UTC");
 }
 
 export default App;

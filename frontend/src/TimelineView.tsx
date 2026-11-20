@@ -3,6 +3,7 @@ import Dropdown from "./Dropdown";
 import { CalendarDays, ChevronRight, Filter } from "lucide-react";
 import { useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
+import ElasticScroll from "./ElasticScroll";
 
 export default function TimelineView({
   events,
@@ -40,7 +41,7 @@ export default function TimelineView({
           />
         </div>
       </header>
-      <div className="timeline-page-scroll">
+      <ElasticScroll className="timeline-page-scroll">
         {filtered.length ? (
           <div className="timeline-track">
             {filtered.map((event) => (
@@ -72,7 +73,7 @@ export default function TimelineView({
             <span>在词条中添加日期后，事件会显示在此处。</span>
           </div>
         )}
-      </div>
+      </ElasticScroll>
     </div>
   );
 }

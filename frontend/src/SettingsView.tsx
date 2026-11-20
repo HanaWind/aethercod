@@ -16,6 +16,7 @@ import {
   type FieldDefinition,
   type ProjectState,
 } from "./api";
+import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
 
 const FIELD_TYPES = [
   "text",
@@ -347,11 +348,23 @@ export default function SettingsView({
             <div className="settings-section-title">
               <div>
                 <span className="section-kicker">访问状态</span>
-                <h2>编辑保护</h2>
+                <h2>
+                  {state.read_only
+                    ? "当前状态：只读锁定模式"
+                    : state.writable
+                      ? "当前状态：正常可编辑（读写模式）"
+                      : "当前状态：资料库不可写"}
+                </h2>
               </div>
               <ShieldCheck size={18} />
             </div>
-            <p>只读模式会在桥接层拒绝所有项目写入请求。</p>
+            <p>
+              {state.read_only
+                ? "正文、属性和关联均已锁定，关闭只读模式后可继续编辑。"
+                : state.writable
+                  ? "词条正文、属性、关联和资料库设置均可写入本地数据库。"
+                  : "当前资料库权限不允许写入，设置和词条内容无法保存。"}
+            </p>
           </section>
         </form>
       ) : (
@@ -369,7 +382,12 @@ export default function SettingsView({
                 key={type.id}
                 onClick={() => setSelectedTypeId(type.id)}
               >
-                <span>{type.icon}</span>
+                <span>
+                  {(() => {
+                    const Icon = getTypeIcon(type.icon);
+                    return Icon ? <Icon size={15} /> : type.icon;
+                  })()}
+                </span>
                 <strong>{type.name}</strong>
                 <small>{type.is_builtin ? "内置" : "自定义"}</small>
               </button>
@@ -386,12 +404,9 @@ export default function SettingsView({
                 required
                 disabled={!state.writable}
               />
-              <input
-                className="type-icon-input"
-                aria-label="类型图标"
-                maxLength={2}
+              <TypeIconPicker
                 value={newTypeIcon}
-                onChange={(event) => setNewTypeIcon(event.target.value)}
+                onChange={setNewTypeIcon}
                 disabled={!state.writable}
               />
               <button
@@ -451,11 +466,10 @@ export default function SettingsView({
                     </label>
                     <label className="type-icon-field">
                       图标
-                      <input
-                        maxLength={2}
+                      <TypeIconPicker
                         value={typeIcon}
+                        onChange={setTypeIcon}
                         disabled={!state.writable}
-                        onChange={(event) => setTypeIcon(event.target.value)}
                       />
                     </label>
                     <button

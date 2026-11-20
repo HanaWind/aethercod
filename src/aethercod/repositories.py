@@ -374,7 +374,9 @@ class FieldDefinitionRepository:
     ) -> None:
         if value is None and allow_none:
             return
-        if field_type in {"text", "textarea", "string", "color", "url"} and not isinstance(value, str):
+        if field_type in {"text", "textarea", "string", "color", "url"} and not isinstance(
+            value, str
+        ):
             raise ValueError(f"Expected string value for {field_type}")
         if field_type == "date":
             if isinstance(value, str):
@@ -551,7 +553,7 @@ class EntityRepository:
         ):
             try:
                 e.custom_fields[r[0]] = json.loads(r[1])
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 e.custom_fields[r[0]] = r[1]
         e.dates = [
             dict(r)
@@ -830,6 +832,8 @@ class RelationRepository:
         reverse_label: str = "",
         notes: str = "",
         id: str | None = None,
+        *,
+        commit: bool = True,
     ) -> Relation:
         source_id, target_id = self._check_endpoints(source_id, target_id)
         label = str(label).strip()
@@ -839,7 +843,7 @@ class RelationRepository:
         relation = Relation(
             id or new_uuid(), source_id, target_id, label, reverse_label, notes, utc_now()
         )
-        with self.conn:
+        with self.conn if commit else nullcontext():
             self.conn.execute(
                 "INSERT INTO relations(id,source_id,target_id,label,reverse_label,notes,created_at) VALUES(?,?,?,?,?,?,?)",
                 (
@@ -863,6 +867,7 @@ class RelationRepository:
         label: str | None = None,
         reverse_label: str | None = None,
         notes: str | None = None,
+        commit: bool = True,
     ) -> Relation:
         current = self.get(relation_id)
         if current is None:
@@ -883,7 +888,7 @@ class RelationRepository:
             notes if notes is not None else current.notes,
             current.id,
         )
-        with self.conn:
+        with self.conn if commit else nullcontext():
             self.conn.execute(
                 "UPDATE relations SET source_id=?,target_id=?,label=?,reverse_label=?,notes=? WHERE id=?",
                 values,
@@ -892,8 +897,8 @@ class RelationRepository:
 
     update_relation = update
 
-    def delete(self, relation_id: str) -> None:
-        with self.conn:
+    def delete(self, relation_id: str, *, commit: bool = True) -> None:
+        with self.conn if commit else nullcontext():
             self.conn.execute("DELETE FROM relations WHERE id=?", (normalize_uuid(relation_id),))
 
     def for_entity(self, entity_id: str) -> list[dict[str, Any]]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import pytest
 
@@ -99,7 +100,9 @@ def test_bridge_creates_project_and_round_trips_entities(tmp_path):
         {"id": saved_second["id"], "name": "雾松堡", "color": "#7c3aed"}
     ]
     assert api.get_timeline(saved_first["id"])[0]["year"] == 125
-    assert api.get_history(saved_first["id"])[0]["change_type"] == "create"
+    history = api.get_history(saved_first["id"])
+    assert any(item["change_type"] == "create" for item in history)
+    assert any(item["change_type"] == "relation" for item in history)
     assert relation["label"] == "守护"
     with ThreadPoolExecutor(max_workers=1) as executor:
         assert executor.submit(api.list_types).result()
@@ -179,4 +182,69 @@ def test_bridge_manages_types_fields_graph_and_read_only_mode(tmp_path):
     assert api.get_graph()["edges"] == []
     empty_type = api.create_type("空类型")
     assert api.delete_type(empty_type["id"])
+    api.close_project()
+
+
+def test_bridge_records_detailed_history_and_restores_entity_and_relations(tmp_path):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "history.aethercod"), "历史", "纪年")
+    first = api.create_entity("person")
+    first.update({"name": "黎明", "summary": "最初的记录"})
+    original = api.save_entity(first)
+    first.update({"name": "晨光", "summary": "修改后的记录", "color": "#2582c4"})
+    updated = api.save_entity(first)
+    details = api.get_history(updated["id"])
+    update_entry = next(item for item in details if item["change_type"] == "update")
+    assert "名称" in update_entry["description"]
+    assert "摘要" in update_entry["description"]
+    changed_at = datetime.fromisoformat(update_entry["changed_at"])
+    assert changed_at.tzinfo is not None
+    assert changed_at.microsecond % 1000 == 0
+
+    second = api.create_entity("place")
+    second["name"] = "雾城"
+    target = api.save_entity(second)
+    relation = api.save_relation(
+        {"source_id": updated["id"], "target_id": target["id"], "label": "驻守"}
+    )
+    relation_version = next(
+        item["version"]
+        for item in api.get_history(updated["id"])
+        if item["change_type"] == "relation"
+    )
+    api.save_relation(
+        {
+            **relation,
+            "label": "守护",
+            "reverse_label": "庇护",
+            "notes": "彼此守望",
+        }
+    )
+    relation_update = next(
+        item
+        for item in api.get_history(updated["id"])
+        if item["change_type"] == "relation" and "更新关联" in item["description"]
+    )
+    assert "驻守" in relation_update["description"]
+    assert "守护" in relation_update["description"]
+    assert "彼此守望" in relation_update["description"]
+    api.delete_relation(relation["id"])
+    restored = api.restore_entity_version(updated["id"], relation_version)
+    assert restored["name"] == "晨光"
+    assert restored["color"] == "#2582c4"
+    assert restored["relations"][0]["other_name"] == "雾城"
+
+    api.restore_entity_version(original["id"], 1)
+    rolled_back = api.get_entity(original["id"])
+    assert rolled_back["name"] == "黎明"
+    assert rolled_back["relations"] == []
+    assert api.get_history(original["id"])[0]["change_type"] == "restore"
+
+    many_versions = api.create_entity("person")
+    many_versions["name"] = "长历史"
+    many_versions = api.save_entity(many_versions)
+    for version in range(55):
+        many_versions["summary"] = str(version)
+        many_versions = api.save_entity(many_versions)
+    assert len(api.get_history(many_versions["id"])) == 56
     api.close_project()

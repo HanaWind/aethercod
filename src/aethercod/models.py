@@ -26,7 +26,7 @@ _DATE_NAMESPACE = uuid.UUID("5bcf2ba8-59e5-4a3e-a27a-42d7f78ddf10")
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def new_uuid() -> str:

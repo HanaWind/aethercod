@@ -83,7 +83,7 @@ class EntityHistory:
         ).fetchone()
         return (result[0] or 0) + 1
 
-    def get_history(self, entity_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def get_history(self, entity_id: str, limit: int | None = 50) -> list[dict[str, Any]]:
         """获取实体历史记录。
 
         Args:
@@ -93,16 +93,17 @@ class EntityHistory:
         Returns:
             历史记录列表，按版本倒序
         """
-        rows = self.conn.execute(
-            """
+        query = """
             SELECT id, version, changed_by, changed_at, change_type, change_description
             FROM entity_history
             WHERE entity_id = ?
             ORDER BY version DESC
-            LIMIT ?
-        """,
-            (normalize_uuid(entity_id), limit),
-        ).fetchall()
+        """
+        parameters: tuple[Any, ...] = (normalize_uuid(entity_id),)
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters = (*parameters, max(0, int(limit)))
+        rows = self.conn.execute(query, parameters).fetchall()
 
         return [
             {
@@ -160,9 +161,7 @@ class EntityHistory:
 
         return entity
 
-    def compare_versions(
-        self, entity_id: str, version1: int, version2: int
-    ) -> dict[str, Any]:
+    def compare_versions(self, entity_id: str, version1: int, version2: int) -> dict[str, Any]:
         """比较两个版本的差异。
 
         Args:
@@ -247,6 +246,7 @@ class EntityHistory:
             "dates": entity.dates,
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
+            "deleted_at": entity.deleted_at,
         }
 
     @staticmethod
@@ -262,6 +262,7 @@ class EntityHistory:
             remarks=data.get("remarks", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
+            deleted_at=data.get("deleted_at"),
             aliases=data.get("aliases", []),
             tags=data.get("tags", []),
             custom_fields=data.get("custom_fields", {}),

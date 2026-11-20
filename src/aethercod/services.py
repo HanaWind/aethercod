@@ -313,13 +313,23 @@ class TimelineService:
             return int(match.group(1)) if match else None
 
         def date_key(row: dict[str, Any]) -> tuple[Any, ...]:
-            start_year = row["year"] if isinstance(row["year"], int) else parse_year(row["date_value"])
-            end_year = row["end_year"] if isinstance(row["end_year"], int) else parse_year(row["end_date_value"])
+            start_year = (
+                row["year"] if isinstance(row["year"], int) else parse_year(row["date_value"])
+            )
+            end_year = (
+                row["end_year"]
+                if isinstance(row["end_year"], int)
+                else parse_year(row["end_date_value"])
+            )
             start_text = str(row.get("date_value") or "")
             return (
                 start_year if start_year is not None else 10**12,
                 start_text,
-                end_year if end_year is not None else start_year if start_year is not None else 10**12,
+                (
+                    end_year
+                    if end_year is not None
+                    else start_year if start_year is not None else 10**12
+                ),
                 str(row.get("name") or "").casefold(),
                 str(row.get("id") or ""),
             )
@@ -392,10 +402,19 @@ class ProjectService:
         return Entity(id=new_uuid(), type_id=type_id, name="未命名词条")
 
     def new_relation(
-        self, source_id: str, target_id: str, label: str, reverse_label: str = "", notes: str = ""
+        self,
+        source_id: str,
+        target_id: str,
+        label: str,
+        reverse_label: str = "",
+        notes: str = "",
+        *,
+        commit: bool = True,
     ) -> Relation:
         self._ensure_writable()
-        return self.relations.create(source_id, target_id, label, reverse_label, notes)
+        return self.relations.create(
+            source_id, target_id, label, reverse_label, notes, commit=commit
+        )
 
     def relation_rows(self, entity_id: str) -> list[dict[str, Any]]:
         rows = self.relations.for_entity(entity_id)
