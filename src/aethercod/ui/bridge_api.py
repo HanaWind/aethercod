@@ -9,6 +9,8 @@ import re
 import sqlite3
 from threading import RLock
 from typing import Any, Callable, TypeVar
+from urllib.parse import urlparse
+import webbrowser
 
 from ..db import connect, is_builtin_field
 from ..history import EntityHistory
@@ -116,6 +118,23 @@ class BridgeAPI:
     def _project_meta(conn: sqlite3.Connection) -> dict[str, str]:
         return {row[0]: row[1] for row in conn.execute("SELECT key,value FROM project_meta")}
 
+    def _hidden_type_ids(self) -> set[str]:
+        if self._conn is None:
+            return set()
+        row = self._conn.execute(
+            "SELECT value FROM project_meta WHERE key='hidden_entity_types'"
+        ).fetchone()
+        if row is None:
+            return set()
+        try:
+            values = json.loads(row[0])
+        except TypeError, json.JSONDecodeError:
+            return set()
+        return {str(value) for value in values} if isinstance(values, list) else set()
+
+    def _type_dict(self, entity_type: Any) -> dict[str, Any]:
+        return {**asdict(entity_type), "hidden": entity_type.id in self._hidden_type_ids()}
+
     def _replace_project(self, conn: sqlite3.Connection, path: str) -> None:
         old_conn = self._conn
         self._conn = conn
@@ -206,8 +225,11 @@ class BridgeAPI:
                 "read_only": False,
             }
         meta = self._project_meta(self._conn)
-        types = [asdict(item) for item in self._service.taxonomy.list_types()]
-        entities = self._service.search.search()
+        hidden_types = self._hidden_type_ids()
+        types = [self._type_dict(item) for item in self._service.taxonomy.list_types()]
+        entities = [
+            entity for entity in self._service.search.search() if entity.type_id not in hidden_types
+        ]
         return {
             "project": {
                 "path": self._path,
@@ -335,7 +357,12 @@ class BridgeAPI:
     @_serialized
     def list_entities(self, query: str = "", type_id: str = "") -> list[dict[str, Any]]:
         service = self._require_service()
-        entities = service.search.search(str(query or ""), str(type_id or "") or None)
+        hidden_types = self._hidden_type_ids()
+        entities = [
+            entity
+            for entity in service.search.search(str(query or ""), str(type_id or "") or None)
+            if entity.type_id not in hidden_types
+        ]
         return [
             {
                 "id": entity.id,
@@ -459,22 +486,97 @@ class BridgeAPI:
         return True
 
     @_serialized
+    def delete_graph_node(self, entity_id: str) -> bool:
+        service = self._ensure_writable()
+        entity = service.entities.get(str(entity_id), include_deleted=False)
+        if entity is None:
+            return False
+        assert self._conn is not None and self._history is not None
+        relations = self._relation_snapshot(entity.id)
+        related_ids = {
+            endpoint
+            for relation in relations
+            for endpoint in (relation["source_id"], relation["target_id"])
+            if endpoint != entity.id
+        }
+        with atomic(self._conn):
+            self._save_entity_snapshot(
+                entity,
+                "delete",
+                f"从关系图谱永久删除「{entity.name}」及其 {len(relations)} 条关联",
+            )
+            self._conn.execute(
+                "DELETE FROM relations WHERE source_id=? OR target_id=?",
+                (entity.id, entity.id),
+            )
+            for related_id in related_ids:
+                related = service.entities.get(related_id, include_deleted=False)
+                if related is not None:
+                    self._save_entity_snapshot(
+                        related,
+                        "relation",
+                        f"删除关联词条「{entity.name}」的全部关系",
+                    )
+            for table in (
+                "entity_aliases",
+                "entity_tags",
+                "entity_field_values",
+                "entity_dates",
+            ):
+                self._conn.execute(f"DELETE FROM {table} WHERE entity_id=?", (entity.id,))
+            self._conn.execute("DELETE FROM alias_redirects WHERE entity_id=?", (entity.id,))
+            self._conn.execute("DELETE FROM entities WHERE id=?", (entity.id,))
+        return True
+
+    @_serialized
     def list_types(self) -> list[dict[str, Any]]:
-        return [asdict(item) for item in self._require_service().taxonomy.list_types()]
+        service = self._require_service()
+        return [self._type_dict(item) for item in service.taxonomy.list_types()]
+
+    @_serialized
+    def set_type_hidden(self, type_id: str, hidden: bool) -> dict[str, Any]:
+        service = self._ensure_writable()
+        if service.taxonomy.get(str(type_id)) is None:
+            raise ValueError("Unknown entity type")
+        assert self._conn is not None
+        hidden_types = self._hidden_type_ids()
+        if hidden:
+            hidden_types.add(str(type_id))
+        else:
+            hidden_types.discard(str(type_id))
+        self._conn.execute(
+            "INSERT INTO project_meta(key,value) VALUES('hidden_entity_types',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps(sorted(hidden_types), ensure_ascii=False),),
+        )
+        self._conn.commit()
+        return self.get_state()
+
+    @_serialized
+    def open_external_url(self, url: str) -> bool:
+        parsed = urlparse(str(url))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "github.com"
+            or not (
+                parsed.path == "/HanaWind/aethercod"
+                or parsed.path.startswith("/HanaWind/aethercod/")
+            )
+        ):
+            raise ValueError("Only the Aethercod GitHub repository can be opened externally")
+        return bool(webbrowser.open(parsed.geturl(), new=2))
 
     @_serialized
     def create_type(self, name: str, icon: str = "✦") -> dict[str, Any]:
         service = self._ensure_writable()
-        return asdict(service.taxonomy.create_type(str(name), str(icon or "✦")))
+        return self._type_dict(service.taxonomy.create_type(str(name), str(icon or "✦")))
 
     @_serialized
     def update_type(self, type_id: str, name: str, icon: str = "") -> dict[str, Any]:
         service = self._ensure_writable()
-        return asdict(
+        return self._type_dict(
             service.taxonomy.update_type(
-                str(type_id),
-                name=str(name),
-                icon=str(icon) if icon else None,
+                str(type_id), name=str(name), icon=str(icon) if icon else None
             )
         )
 
@@ -643,13 +745,22 @@ class BridgeAPI:
 
     @_serialized
     def get_timeline(self, entity_id: str = "") -> list[dict[str, Any]]:
-        return self._require_service().timeline.entries(entity_id=str(entity_id or "") or None)
+        service = self._require_service()
+        hidden_types = self._hidden_type_ids()
+        return [
+            entry
+            for entry in service.timeline.entries(entity_id=str(entity_id or "") or None)
+            if entry["type_id"] not in hidden_types
+        ]
 
     @_serialized
     def get_graph(self) -> dict[str, list[dict[str, Any]]]:
         service = self._require_service()
         assert self._conn is not None
-        entities = service.entities.list()
+        hidden_types = self._hidden_type_ids()
+        entities = [
+            entity for entity in service.entities.list() if entity.type_id not in hidden_types
+        ]
         count = max(1, len(entities))
         nodes = []
         for index, entity in enumerate(entities):
@@ -695,12 +806,16 @@ class BridgeAPI:
         entity.deleted_at = snapshot.get("deleted_at")
         desired_relations = snapshot.get("relations", [])
         with atomic(self._conn):
+            self._conn.execute(
+                "DELETE FROM entity_history WHERE entity_id=? AND version>?",
+                (entity.id, int(version)),
+            )
             if "relations" in snapshot:
                 self._conn.execute(
                     "DELETE FROM relations WHERE source_id=? OR target_id=?",
                     (entity.id, entity.id),
                 )
-            service.save_entity(entity)
+            service.entities.save(entity, commit=False, preserve_timestamps=True)
             for relation in desired_relations:
                 source = service.entities.get(relation["source_id"])
                 target = service.entities.get(relation["target_id"])
@@ -721,9 +836,4 @@ class BridgeAPI:
                 )
             restored = service.entities.get(entity.id, include_deleted=True)
             assert restored is not None
-            self._save_entity_snapshot(
-                restored,
-                "restore",
-                f"恢复到历史版本 {int(version)}：{restored.name}",
-            )
         return self.get_entity(entity.id, include_deleted=True) or self._entity_dict(restored)

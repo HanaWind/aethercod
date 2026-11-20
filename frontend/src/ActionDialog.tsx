@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { CircleAlert } from "lucide-react";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -7,6 +8,7 @@ type Request = {
   message?: string;
   initialValue?: string;
   confirmLabel: string;
+  danger?: boolean;
 };
 const DialogContext = createContext<
   (request: Request) => Promise<string | null>
@@ -61,7 +63,10 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
                     close(input.trim());
                   }}
                 >
-                  <h2>{dialog.title}</h2>
+                  <h2 className={dialog.danger ? "danger-dialog-title" : ""}>
+                    {dialog.danger && <CircleAlert size={19} />}
+                    {dialog.title}
+                  </h2>
                   {dialog.message && <p>{dialog.message}</p>}
                   {dialog.initialValue !== undefined && (
                     <input
@@ -83,7 +88,7 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
                       取消
                     </button>
                     <button
-                      className="primary-button"
+                      className={`primary-button ${dialog.danger ? "danger-button" : ""}`}
                       type="submit"
                       disabled={
                         dialog.initialValue !== undefined && !input.trim()

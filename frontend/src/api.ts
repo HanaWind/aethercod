@@ -3,6 +3,7 @@ export type EntityType = {
   name: string;
   icon: string;
   is_builtin: boolean;
+  hidden?: boolean;
 };
 
 export type FieldDefinition = {
@@ -146,6 +147,7 @@ export type BridgeApi = {
     icon?: string,
   ): Promise<EntityType>;
   delete_type(type_id: string): Promise<boolean>;
+  set_type_hidden(type_id: string, hidden: boolean): Promise<ProjectState>;
   save_field(
     field: Partial<FieldDefinition> & { type_id: string },
   ): Promise<FieldDefinition>;
@@ -155,6 +157,7 @@ export type BridgeApi = {
   create_entity(type_id: string): Promise<Entity>;
   save_entity(entity: Entity): Promise<Entity>;
   delete_entity(entity_id: string): Promise<boolean>;
+  delete_graph_node(entity_id: string): Promise<boolean>;
   save_relation(
     data: Partial<Relation> & {
       source_id: string;
@@ -167,6 +170,7 @@ export type BridgeApi = {
   get_history(entity_id: string): Promise<HistoryEntry[]>;
   restore_entity_version(entity_id: string, version: number): Promise<Entity>;
   get_graph(): Promise<GraphData>;
+  open_external_url(url: string): Promise<boolean>;
   window_action(
     action: "minimize" | "maximize" | "restore" | "close",
   ): Promise<void>;

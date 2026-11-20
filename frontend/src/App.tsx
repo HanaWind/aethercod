@@ -34,6 +34,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   desktopApi,
   type Entity,
@@ -179,6 +180,15 @@ function Workspace() {
       setHistory([]);
       historyEntity.current = "";
       setActiveView("entries");
+    } else {
+      setSelectedId((current) =>
+        next.entities.some((entity) => entity.id === current) ? current : "",
+      );
+      setDraft((current) =>
+        current && !next.entities.some((entity) => entity.id === current.id)
+          ? null
+          : current,
+      );
     }
   }, []);
 
@@ -425,6 +435,7 @@ function Workspace() {
         title: "删除类型",
         message: `删除“${type.name}”？`,
         confirmLabel: "删除",
+        danger: true,
       })) === null
     )
       return;
@@ -691,6 +702,17 @@ function Workspace() {
 
   const removeRelation = async (relationId: string) => {
     if (!draft || !state.writable || !(await flushDraft())) return;
+    const relation = draft.relations?.find((item) => item.id === relationId);
+    if (
+      !relation ||
+      (await actionDialog({
+        title: "删除关联",
+        message: `删除与“${relation.other_name}”之间的关联？`,
+        confirmLabel: "删除关联",
+        danger: true,
+      })) === null
+    )
+      return;
     try {
       await desktopApi()?.delete_relation(relationId);
       const refreshed = await desktopApi()?.get_entity(draft.id);
@@ -707,6 +729,7 @@ function Workspace() {
         title: "移入回收站",
         message: `将“${entityName}”移入回收站？`,
         confirmLabel: "移入回收站",
+        danger: true,
       })) === null
     )
       return;
@@ -739,6 +762,39 @@ function Workspace() {
     if (draft) await removeEntity(draft.id, draft.name);
   };
 
+  const deleteGraphNode = async (entityId: string, name: string) => {
+    if (
+      !state.writable ||
+      !(await flushDraft()) ||
+      (await actionDialog({
+        title: "永久删除图谱节点",
+        message: `永久删除“${name}”及其所有关联关系？`,
+        confirmLabel: "永久删除",
+        danger: true,
+      })) === null
+    )
+      return;
+    try {
+      await desktopApi()?.delete_graph_node(entityId);
+      setState((current) => ({
+        ...current,
+        entities: current.entities.filter((entity) => entity.id !== entityId),
+      }));
+      if (selectedId === entityId) {
+        setSelectedId("");
+        setDraft(null);
+        setTimeline([]);
+      }
+      const api = desktopApi();
+      if (api) {
+        setGraph(await api.get_graph());
+        setGlobalTimeline(await api.get_timeline());
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   const typeById = (id: string) => state.types.find((type) => type.id === id);
   const reportError = useCallback((message: string) => setError(message), []);
 
@@ -769,22 +825,20 @@ function Workspace() {
             <Sparkles size={17} />
           </div>
           <span>AETHERCOD</span>
-          <span className="brand-divider" />
-          <span className="title-project">
-            {state.project?.name ?? "世界观典籍"}
-          </span>
+          {state.project && (
+            <>
+              <span className="brand-divider" />
+              <span className="title-project">{state.project.name}</span>
+            </>
+          )}
         </div>
         <div className="titlebar-actions no-drag">
-          <div className={`save-indicator ${saving ? "is-saving" : ""}`}>
-            <span />
-            {saving
-              ? "正在同步"
-              : dirty
-                ? "尚未保存"
-                : state.project
-                  ? "已同步至本地库"
-                  : "本地工作台"}
-          </div>
+          {state.project && (
+            <div className={`save-indicator ${saving ? "is-saving" : ""}`}>
+              <span />
+              {saving ? "正在同步" : dirty ? "尚未保存" : "已同步至本地库"}
+            </div>
+          )}
           {state.project && (
             <button
               className={`readonly-toggle ${state.read_only ? "active" : ""}`}
@@ -1244,6 +1298,7 @@ function Workspace() {
               graph={graph}
               types={state.types}
               onSelect={selectById}
+              onDelete={(id, name) => void deleteGraphNode(id, name)}
             />
           ) : !state.project ? (
             <section className="welcome-state">
@@ -1472,6 +1527,7 @@ function Workspace() {
                             notes: value,
                           }))
                         }
+                        suggestions={state.entities}
                         onResolve={async (value) => {
                           const target =
                             await desktopApi()?.resolve_entity(value);
@@ -2392,6 +2448,7 @@ function EditableText({
   disabled,
   onChange,
   onResolve,
+  suggestions = [],
 }: {
   kind: "title" | "summary" | "notes";
   value: string;
@@ -2399,8 +2456,18 @@ function EditableText({
   disabled: boolean;
   onChange: (value: string) => void;
   onResolve?: (value: string) => Promise<void>;
+  suggestions?: EntitySummary[];
 }) {
   const [editing, setEditing] = useState(false);
+  const [completion, setCompletion] = useState<{
+    start: number;
+    cursor: number;
+    query: string;
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (disabled) setEditing(false);
   }, [disabled]);
@@ -2412,6 +2479,50 @@ function EditableText({
         ? "summary-input"
         : "notes-editor";
   const Component = kind === "title" ? "h1" : kind === "summary" ? "p" : "div";
+  const candidates = completion
+    ? suggestions
+        .filter((entity) =>
+          `${entity.name} ${entity.summary}`
+            .toLocaleLowerCase()
+            .includes(completion.query.toLocaleLowerCase()),
+        )
+        .slice(0, 7)
+    : [];
+
+  const updateCompletion = (
+    textarea: HTMLTextAreaElement,
+    text: string,
+    cursor: number,
+  ) => {
+    if (kind !== "notes" || disabled) return setCompletion(null);
+    const match = text.slice(0, cursor).match(/(\[\[|@)([^\s\[\]]*)$/);
+    if (!match) return setCompletion(null);
+    const caret = getTextareaCaret(textarea, cursor);
+    setCompletion((current) => ({
+      start: cursor - match[0].length,
+      cursor,
+      query: match[2],
+      index: current?.query === match[2] ? current.index : 0,
+      x: Math.max(8, Math.min(caret.x, window.innerWidth - 250)),
+      y: Math.max(8, Math.min(caret.y + 18, window.innerHeight - 238)),
+    }));
+  };
+
+  const insertCandidate = (candidate: EntitySummary) => {
+    if (!completion) return;
+    const insertion = `[[${candidate.name}]]`;
+    const next =
+      value.slice(0, completion.start) +
+      insertion +
+      value.slice(completion.cursor);
+    const nextCursor = completion.start + insertion.length;
+    setCompletion(null);
+    onChange(next);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
 
   if (editing && !disabled) {
     const common = {
@@ -2436,9 +2547,114 @@ function EditableText({
         }
       },
     };
-    return isMultiline ? (
-      <textarea {...common} rows={8} />
-    ) : (
+    if (isMultiline) {
+      const shell = document.querySelector(".app-shell");
+      return (
+        <>
+          <textarea
+            {...common}
+            ref={textareaRef}
+            rows={8}
+            onChange={(event) => {
+              onChange(event.target.value);
+              updateCompletion(
+                event.currentTarget,
+                event.target.value,
+                event.currentTarget.selectionStart,
+              );
+            }}
+            onBlur={() => {
+              setCompletion(null);
+              setEditing(false);
+            }}
+            onClick={(event) =>
+              updateCompletion(
+                event.currentTarget,
+                event.currentTarget.value,
+                event.currentTarget.selectionStart,
+              )
+            }
+            onKeyUp={(event) => {
+              if (!completion || !event.key.startsWith("Arrow"))
+                updateCompletion(
+                  event.currentTarget,
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                );
+            }}
+            onKeyDown={(event) => {
+              if (completion && candidates.length) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setCompletion((current) =>
+                    current
+                      ? {
+                          ...current,
+                          index:
+                            (current.index +
+                              (event.key === "ArrowDown" ? 1 : -1) +
+                              candidates.length) %
+                            candidates.length,
+                        }
+                      : null,
+                  );
+                  return;
+                }
+                if (event.key === "Tab" || event.key === "Enter") {
+                  event.preventDefault();
+                  insertCandidate(candidates[completion.index]);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setCompletion(null);
+                  return;
+                }
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          {shell && completion && candidates.length > 0 &&
+            createPortal(
+              <motion.div
+                className="mention-suggestions glass-menu"
+                role="listbox"
+                aria-label="词条引用候选"
+                style={{ left: completion.x, top: completion.y }}
+                initial={{ opacity: 0, scale: 0.97, y: 4 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.98, y: 2 }}
+                transition={{ duration: 0.14 }}
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                {candidates.map((candidate, index) => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    role="option"
+                    aria-selected={completion.index === index}
+                    onMouseEnter={() =>
+                      setCompletion((current) =>
+                        current ? { ...current, index } : null,
+                      )
+                    }
+                    onClick={() => insertCandidate(candidate)}
+                  >
+                    <span className="entity-dot" style={{ background: candidate.color }} />
+                    <span>{candidate.name}</span>
+                    <small>{candidate.summary}</small>
+                  </button>
+                ))}
+              </motion.div>,
+              shell,
+            )}
+        </>
+      );
+    }
+    return (
       <input {...common} />
     );
   }
@@ -2481,6 +2697,51 @@ function EditableText({
       )}
     </Component>
   );
+}
+
+function getTextareaCaret(textarea: HTMLTextAreaElement, cursor: number) {
+  const bounds = textarea.getBoundingClientRect();
+  const computed = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+  const copiedProperties = [
+    "boxSizing",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "textAlign",
+    "textIndent",
+    "textTransform",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+  ] as const;
+  mirror.style.position = "fixed";
+  mirror.style.visibility = "hidden";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.style.width = `${bounds.width}px`;
+  for (const property of copiedProperties)
+    mirror.style[property] = computed[property];
+  mirror.textContent = textarea.value.slice(0, cursor);
+  marker.textContent = "\u200b";
+  mirror.append(marker);
+  document.body.append(mirror);
+  const markerBounds = marker.getBoundingClientRect();
+  const caret = {
+    x: bounds.left + markerBounds.left - textarea.scrollLeft,
+    y: bounds.top + markerBounds.top - textarea.scrollTop,
+  };
+  mirror.remove();
+  return caret;
 }
 
 function formatUuid(id: string) {

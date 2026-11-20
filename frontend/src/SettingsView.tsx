@@ -3,7 +3,11 @@ import Dropdown from "./Dropdown";
 import {
   ChevronDown,
   CirclePlus,
+  Eye,
+  EyeOff,
+  ExternalLink,
   FileCog,
+  Github,
   Plus,
   Save,
   ShieldCheck,
@@ -176,6 +180,7 @@ export default function SettingsView({
         title: "删除类型",
         message: `删除“${type.name}”？`,
         confirmLabel: "删除",
+        danger: true,
       })) === null
     )
       return;
@@ -185,6 +190,18 @@ export default function SettingsView({
       setTypes(next);
       setSelectedTypeId(next[0]?.id ?? "");
       await onChanged();
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const toggleTypeHidden = async (type: EntityType) => {
+    try {
+      const next = await desktopApi()?.set_type_hidden(type.id, !type.hidden);
+      if (next) {
+        setTypes(next.types);
+        await onChanged();
+      }
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -237,6 +254,7 @@ export default function SettingsView({
         title: "删除字段",
         message: `删除“${field.name}”及其已保存的值？`,
         confirmLabel: "删除",
+        danger: true,
       })) === null
     )
       return;
@@ -366,6 +384,33 @@ export default function SettingsView({
                   : "当前资料库权限不允许写入，设置和词条内容无法保存。"}
             </p>
           </section>
+          <section className="settings-section feedback-section">
+            <div className="settings-section-title">
+              <div>
+                <span className="section-kicker">反馈与开源</span>
+                <h2>参与 Aethercod</h2>
+              </div>
+              <Github size={18} />
+            </div>
+            <p>欢迎提交问题反馈、功能建议或代码贡献。</p>
+            <a
+              className="secondary-button github-button"
+              href="https://github.com/HanaWind/aethercod"
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => {
+                const api = desktopApi();
+                if (!api) return;
+                event.preventDefault();
+                void api
+                  .open_external_url("https://github.com/HanaWind/aethercod")
+                  .catch((reason: Error) => onError(reason.message));
+              }}
+            >
+              <ExternalLink size={14} />
+              项目 GitHub
+            </a>
+          </section>
         </form>
       ) : (
         <div className="taxonomy-settings">
@@ -376,7 +421,7 @@ export default function SettingsView({
                 <h2>类型</h2>
               </div>
             </div>
-            {types.map((type) => (
+            {types.filter((type) => !type.hidden).map((type) => (
               <button
                 className={`taxonomy-choice ${selectedTypeId === type.id ? "selected" : ""}`}
                 key={type.id}
@@ -392,6 +437,38 @@ export default function SettingsView({
                 <small>{type.is_builtin ? "内置" : "自定义"}</small>
               </button>
             ))}
+            {types.some((type) => type.hidden) && (
+              <section className="hidden-types-section">
+                <div className="hidden-types-heading">
+                  <span>已隐藏的词条类型</span>
+                  <span>{types.filter((type) => type.hidden).length}</span>
+                </div>
+                {types.filter((type) => type.hidden).map((type) => (
+                  <div className="hidden-type-row" key={type.id}>
+                    <button
+                      className={`taxonomy-choice ${selectedTypeId === type.id ? "selected" : ""}`}
+                      onClick={() => setSelectedTypeId(type.id)}
+                    >
+                      <span>
+                        {(() => {
+                          const Icon = getTypeIcon(type.icon);
+                          return Icon ? <Icon size={15} /> : type.icon;
+                        })()}
+                      </span>
+                      <strong>{type.name}</strong>
+                    </button>
+                    <button
+                      className="icon-button compact"
+                      title={`恢复显示 ${type.name}`}
+                      disabled={!state.writable}
+                      onClick={() => void toggleTypeHidden(type)}
+                    >
+                      <Eye size={14} />
+                    </button>
+                  </div>
+                ))}
+              </section>
+            )}
             <form
               className="add-type-form"
               onSubmit={(event) => void createType(event)}
@@ -432,8 +509,31 @@ export default function SettingsView({
                         {types.find((type) => type.id === selectedTypeId)?.name}
                       </h2>
                     </div>
-                    {!types.find((type) => type.id === selectedTypeId)
-                      ?.is_builtin && (
+                    <div className="type-header-actions">
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={
+                          types.find((type) => type.id === selectedTypeId)?.hidden
+                            ? "恢复显示类型"
+                            : "隐藏类型"
+                        }
+                        disabled={!state.writable}
+                        onClick={() => {
+                          const selected = types.find(
+                            (type) => type.id === selectedTypeId,
+                          );
+                          if (selected) void toggleTypeHidden(selected);
+                        }}
+                      >
+                        {types.find((type) => type.id === selectedTypeId)?.hidden ? (
+                          <Eye size={15} />
+                        ) : (
+                          <EyeOff size={15} />
+                        )}
+                      </button>
+                      {!types.find((type) => type.id === selectedTypeId)
+                        ?.is_builtin && (
                       <button
                         type="button"
                         className="icon-button"
@@ -448,6 +548,7 @@ export default function SettingsView({
                         <Trash2 size={15} />
                       </button>
                     )}
+                    </div>
                   </div>
                   <div className="type-edit-row">
                     <label>

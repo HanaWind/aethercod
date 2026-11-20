@@ -233,12 +233,17 @@ def test_bridge_records_detailed_history_and_restores_entity_and_relations(tmp_p
     assert restored["name"] == "晨光"
     assert restored["color"] == "#2582c4"
     assert restored["relations"][0]["other_name"] == "雾城"
+    remaining_history = api.get_history(updated["id"])
+    assert remaining_history[0]["version"] == relation_version
+    assert all(item["version"] <= relation_version for item in remaining_history)
+    assert all(item["change_type"] != "restore" for item in remaining_history)
 
     api.restore_entity_version(original["id"], 1)
     rolled_back = api.get_entity(original["id"])
     assert rolled_back["name"] == "黎明"
     assert rolled_back["relations"] == []
-    assert api.get_history(original["id"])[0]["change_type"] == "restore"
+    assert [item["version"] for item in api.get_history(original["id"])] == [1]
+    assert api.get_history(original["id"])[0]["change_type"] == "create"
 
     many_versions = api.create_entity("person")
     many_versions["name"] = "长历史"
@@ -247,4 +252,90 @@ def test_bridge_records_detailed_history_and_restores_entity_and_relations(tmp_p
         many_versions["summary"] = str(version)
         many_versions = api.save_entity(many_versions)
     assert len(api.get_history(many_versions["id"])) == 56
+    api.close_project()
+
+
+def test_bridge_hides_and_restores_entity_types_without_removing_data(tmp_path):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "hidden-types.aethercod"), "隐藏类型", "纪年")
+    entity_type = api.create_type("秘藏")
+    entity = api.create_entity(entity_type["id"])
+    entity["name"] = "隐秘词条"
+    entity["dates"] = [{"date_kind": "custom", "label": "隐秘纪年", "year": 80}]
+    saved = api.save_entity(entity)
+
+    hidden_state = api.set_type_hidden(entity_type["id"], True)
+    assert next(item for item in hidden_state["types"] if item["id"] == entity_type["id"])["hidden"]
+    assert saved["id"] not in {item["id"] for item in hidden_state["entities"]}
+    assert api.list_entities() == []
+    assert api.get_timeline() == []
+    assert api.get_graph()["nodes"] == []
+    with pytest.raises(ValueError, match="cannot be deleted|Cannot be deleted"):
+        api.delete_type("person")
+
+    project_path = str(tmp_path / "hidden-types.aethercod")
+    api.close_project()
+    api.open_project(project_path)
+    reopened_state = api.get_state()
+    assert saved["id"] not in {item["id"] for item in reopened_state["entities"]}
+
+    visible_state = api.set_type_hidden(entity_type["id"], False)
+    assert not next(item for item in visible_state["types"] if item["id"] == entity_type["id"])[
+        "hidden"
+    ]
+    assert saved["id"] in {item["id"] for item in visible_state["entities"]}
+    assert api.get_timeline()[0]["label"] == "隐秘纪年"
+    assert api.get_graph()["nodes"][0]["id"] == saved["id"]
+    api.close_project()
+
+
+def test_bridge_opens_only_project_github_links_externally(tmp_path, monkeypatch):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "external-link.aethercod"), "外链", "纪年")
+    opened = []
+    monkeypatch.setattr(
+        "aethercod.ui.bridge_api.webbrowser.open",
+        lambda url, new: opened.append((url, new)) or True,
+    )
+    assert api.open_external_url("https://github.com/HanaWind/aethercod/issues") is True
+    assert opened == [("https://github.com/HanaWind/aethercod/issues", 2)]
+    with pytest.raises(ValueError):
+        api.open_external_url("https://example.org/")
+    api.close_project()
+
+
+def test_bridge_permanently_deletes_graph_node_and_all_relationship_data(tmp_path):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "graph-delete.aethercod"), "图谱删除", "纪年")
+    source = api.create_entity("person")
+    source.update(
+        {
+            "name": "被删节点",
+            "aliases": ["旧称"],
+            "tags": ["遗迹"],
+            "dates": [{"date_kind": "custom", "label": "旧纪", "year": 4}],
+        }
+    )
+    source = api.save_entity(source)
+    target = api.create_entity("place")
+    target["name"] = "留存节点"
+    target = api.save_entity(target)
+    relation = api.save_relation(
+        {"source_id": source["id"], "target_id": target["id"], "label": "守望"}
+    )
+    assert api.delete_graph_node(source["id"]) is True
+    assert api.get_entity(source["id"]) is None
+    assert api.get_entity(target["id"])["relations"] == []
+    assert api.get_graph()["edges"] == []
+    assert (
+        api._conn.execute("SELECT COUNT(*) FROM entities WHERE id=?", (source["id"],)).fetchone()[0]
+        == 0
+    )
+    assert (
+        api._conn.execute(
+            "SELECT COUNT(*) FROM relations WHERE id=?", (relation["id"],)
+        ).fetchone()[0]
+        == 0
+    )
+    assert api.get_history(source["id"])[0]["change_type"] == "delete"
     api.close_project()

@@ -4,18 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const PRESETS = [
-  "#7C3AED",
-  "#5967D8",
-  "#2582C4",
-  "#168B83",
-  "#3D9A62",
-  "#A1A83A",
-  "#D1A131",
-  "#C87536",
-  "#C65354",
-  "#C34D82",
-  "#7D5D9F",
-  "#768393",
+  "#8B5CF6",
+  "#6366F1",
+  "#3B82F6",
+  "#06B6D4",
+  "#14B8A6",
+  "#22C55E",
+  "#84CC16",
+  "#EAB308",
+  "#F97316",
+  "#EF4444",
+  "#EC4899",
+  "#A855F7",
 ];
 
 export default function ColorPicker({
