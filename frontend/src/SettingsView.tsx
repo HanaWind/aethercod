@@ -1,4 +1,5 @@
 import { useActionDialog } from "./ActionDialog";
+import { AnimatePresence, motion } from "framer-motion";
 import Dropdown from "./Dropdown";
 import {
   ChevronDown,
@@ -9,6 +10,7 @@ import {
   FileCog,
   Github,
   Plus,
+  Clock3,
   Save,
   ShieldCheck,
   Trash2,
@@ -62,6 +64,10 @@ export default function SettingsView({
   onProjectUpdated,
   onChanged,
   onError,
+  particlesEnabled,
+  transitionsEnabled,
+  onParticlesChange,
+  onTransitionsChange,
 }: {
   state: ProjectState;
   initialTab: "library" | "types";
@@ -69,6 +75,10 @@ export default function SettingsView({
   onProjectUpdated: (state: ProjectState) => void;
   onChanged: () => Promise<void>;
   onError: (message: string) => void;
+  particlesEnabled: boolean;
+  transitionsEnabled: boolean;
+  onParticlesChange: (enabled: boolean) => void;
+  onTransitionsChange: (enabled: boolean) => void;
 }) {
   const actionDialog = useActionDialog();
   const [tab, setTab] = useState<"library" | "types">(initialTab);
@@ -84,10 +94,25 @@ export default function SettingsView({
   const [newTypeIcon, setNewTypeIcon] = useState("✦");
   const [fieldDraft, setFieldDraft] = useState<FieldDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveMode, setSaveMode] = useState(state.save_mode);
+  const [saveInterval, setSaveInterval] = useState(state.save_interval);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [saveNotice, setSaveNotice] = useState(0);
+
+  useEffect(() => {
+    if (!saveNotice) return;
+    const timeout = window.setTimeout(() => setSaveNotice(0), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [saveNotice]);
 
   useEffect(() => {
     setProject(state.project);
   }, [state.project]);
+
+  useEffect(() => {
+    setSaveMode(state.save_mode);
+    setSaveInterval(state.save_interval);
+  }, [state.save_interval, state.save_mode]);
 
   useEffect(() => {
     setTypes(state.types);
@@ -134,6 +159,24 @@ export default function SettingsView({
       onError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveSaveSettings = async () => {
+    setSavingPolicy(true);
+    try {
+      const next = await desktopApi()?.update_save_settings(
+        saveMode,
+        Math.max(1, saveInterval),
+      );
+      if (next) {
+        onProjectUpdated(next);
+        setSaveNotice((current) => current + 1);
+      }
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingPolicy(false);
     }
   };
 
@@ -362,6 +405,76 @@ export default function SettingsView({
               </button>
             </div>
           </section>
+          <section className="settings-section save-settings-section">
+            <div className="settings-section-title">
+              <div>
+                <span className="section-kicker">保存机制</span>
+                <h2>编辑保存策略</h2>
+              </div>
+              <Clock3 size={18} />
+            </div>
+            <div className="save-mode-options" role="radiogroup" aria-label="保存机制">
+              {([
+                ["manual", "手动保存", "仅在点击保存或按 Ctrl+S 时写入资料库"],
+                ["interval", "定时自动保存", "按设定的分钟间隔保存未提交修改"],
+                ["realtime", "实时自动保存", "编辑后短暂等待并同步到资料库"],
+              ] as const).map(([mode, label, description]) => (
+                <button
+                  type="button"
+                  key={mode}
+                  className={`save-mode-option ${saveMode === mode ? "selected" : ""}`}
+                  role="radio"
+                  aria-checked={saveMode === mode}
+                  disabled={!state.writable}
+                  onClick={() => setSaveMode(mode)}
+                >
+                  <span className="save-mode-radio" />
+                  <span>
+                    <strong>{label}</strong>
+                    <small>{description}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <AnimatePresence initial={false}>
+              {saveMode === "interval" && (
+                <motion.div
+                  key="save-interval"
+                  className="save-interval-region"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <label className="save-interval-field">
+                    自动保存间隔（分钟）
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={saveInterval}
+                      disabled={!state.writable}
+                      onChange={(event) =>
+                        setSaveInterval(Math.max(1, Number(event.target.value) || 1))
+                      }
+                    />
+                  </label>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <div className="settings-form-actions">
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!state.writable || savingPolicy}
+                onClick={() => void saveSaveSettings()}
+              >
+                <Save size={14} />
+                保存
+              </button>
+            </div>
+          </section>
           <section className="settings-section preference-section">
             <div className="settings-section-title">
               <div>
@@ -383,6 +496,19 @@ export default function SettingsView({
                   ? "词条正文、属性、关联和资料库设置均可写入本地数据库。"
                   : "当前资料库权限不允许写入，设置和词条内容无法保存。"}
             </p>
+          </section>
+          <section className="settings-section visual-settings">
+            <div className="settings-section-title"><h2>视觉动效与性能</h2></div>
+            <label>
+              <span>背景粒子</span>
+              <input type="checkbox" checked={particlesEnabled}
+                onChange={(event) => onParticlesChange(event.target.checked)} />
+            </label>
+            <label>
+              <span>界面过渡动画</span>
+              <input type="checkbox" checked={transitionsEnabled}
+                onChange={(event) => onTransitionsChange(event.target.checked)} />
+            </label>
           </section>
           <section className="settings-section feedback-section">
             <div className="settings-section-title">
@@ -721,6 +847,34 @@ export default function SettingsView({
           </section>
         </div>
       )}
+      <AnimatePresence>
+        {saveNotice > 0 && (
+          <motion.div
+            key={saveNotice}
+            role="status"
+            className="settings-save-toast glass-menu"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 5 }}
+            transition={{ duration: 0.18 }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <motion.path
+                d="m5 12 4 4L19 6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={{ pathLength: 0 }}
+                animate={{ pathLength: 1 }}
+                transition={{ duration: 0.32, ease: "easeOut" }}
+              />
+            </svg>
+            保存机制已更新
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

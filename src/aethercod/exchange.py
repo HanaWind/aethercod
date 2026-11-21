@@ -16,7 +16,7 @@ from .repositories import (
     RelationRepository,
     TaxonomyRepository,
 )
-from .db import is_builtin_field
+from .db import SCHEMA_VERSION, is_builtin_field
 
 # Default exports include redirects and rich definitions. Explicit v1 exports
 # remain available for legacy consumers.
@@ -143,7 +143,7 @@ def export_library(
     type_ids = {item["type_id"] for item in entities}
     result: dict[str, Any] = {
         "format_version": format_version,
-        "schema_version": 2,
+        "schema_version": SCHEMA_VERSION,
         "project": _project(conn),
         "entity_types": _types(conn),
         "fields": _fields(conn),
@@ -201,7 +201,7 @@ def export_entity(
                 type_ids.add(other.type_id)
     result: dict[str, Any] = {
         "format_version": format_version,
-        "schema_version": 2,
+        "schema_version": SCHEMA_VERSION,
         "entity": entity_to_dict(entity),
         "entity_types": _types(conn, type_ids),
         "fields": _fields(conn, type_ids),

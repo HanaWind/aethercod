@@ -558,7 +558,7 @@ class EntityRepository:
         e.dates = [
             dict(r)
             for r in self.conn.execute(
-                "SELECT id,date_kind,label,year,date_value,precision,end_year,end_date_value "
+                "SELECT id,date_kind,label,description,year,date_value,precision,end_year,end_date_value "
                 "FROM entity_dates WHERE entity_id=? ORDER BY year, date_value, id",
                 (e.id,),
             )
@@ -698,6 +698,7 @@ class EntityRepository:
                         "entity_id": raw.entity_id,
                         "date_kind": raw.date_kind,
                         "label": raw.label,
+                        "description": getattr(raw, "description", ""),
                         "year": raw.year,
                         "date_value": raw.date_value,
                         "precision": raw.precision,
@@ -752,6 +753,7 @@ class EntityRepository:
                         entity.id,
                         data.get("date_kind", "custom"),
                         data.get("label", ""),
+                        data.get("description", ""),
                         data.get("year"),
                         data.get("date_value"),
                         precision,
@@ -760,7 +762,7 @@ class EntityRepository:
                     )
                 )
             self.conn.executemany(
-                "INSERT INTO entity_dates(id,entity_id,date_kind,label,year,date_value,precision,end_year,end_date_value) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO entity_dates(id,entity_id,date_kind,label,description,year,date_value,precision,end_year,end_date_value) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 date_rows,
             )
         return entity

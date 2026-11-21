@@ -68,6 +68,9 @@ class BridgeAPI:
     def _mark_restored(self, *_args: Any) -> None:
         self._maximized = False
 
+    def window_maximized(self) -> bool:
+        return self._maximized
+
     @_serialized
     def window_action(self, action: str) -> None:
         if self._window is None:
@@ -83,6 +86,7 @@ class BridgeAPI:
                 self._maximized = True
         elif action == "restore":
             self._window.restore()
+            self._maximized = False
         elif action == "close":
             self._window.destroy()
 
@@ -223,8 +227,14 @@ class BridgeAPI:
                 "entities": [],
                 "writable": False,
                 "read_only": False,
+                "save_mode": "realtime",
+                "save_interval": 1,
             }
         meta = self._project_meta(self._conn)
+        try:
+            save_interval = max(1, min(1440, int(meta.get("save_interval", "1") or "1")))
+        except ValueError:
+            save_interval = 1
         hidden_types = self._hidden_type_ids()
         types = [self._type_dict(item) for item in self._service.taxonomy.list_types()]
         entities = [
@@ -251,7 +261,24 @@ class BridgeAPI:
             ],
             "writable": bool(self._service.writable and not self._read_only),
             "read_only": self._read_only,
+            "save_mode": meta.get("save_mode", "realtime"),
+            "save_interval": save_interval,
         }
+
+    @_serialized
+    def update_save_settings(self, save_mode: str, save_interval: int) -> dict[str, Any]:
+        service = self._ensure_writable()
+        if save_mode not in {"manual", "interval", "realtime"}:
+            raise ValueError("Unsupported save mode")
+        interval = max(1, min(1440, int(save_interval)))
+        assert self._conn is not None
+        self._conn.executemany(
+            "INSERT INTO project_meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (("save_mode", save_mode), ("save_interval", str(interval))),
+        )
+        self._conn.commit()
+        return self.get_state()
 
     @_serialized
     def open_project(self, path: str = "") -> dict[str, Any]:

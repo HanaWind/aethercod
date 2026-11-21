@@ -24,9 +24,9 @@ def test_uuid_policy_accepts_hyphens_and_normalizes():
         normalize_uuid("not-a-uuid")
 
 
-def test_new_database_seeds_v2_and_builtin_fields(project):
+def test_new_database_seeds_v3_and_builtin_fields(project):
     conn, service = project
-    assert schema_version(conn) == 2
+    assert schema_version(conn) == 3
     assert {item.id for item in service.taxonomy.list_types()} >= {"person", "polity", "place"}
     assert {field.name for field in service.fields.list("person")} >= {"中文名", "英文名", "称号"}
 
@@ -93,8 +93,35 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
     conn.close()
     upgraded = connect(path)
     try:
-        assert schema_version(upgraded) == 2
+        assert schema_version(upgraded) == 3
         assert upgraded.execute("SELECT name FROM entities").fetchone()[0] == "旧人物"
         assert upgraded.execute("SELECT 1 FROM alias_redirects").fetchone() is None
+    finally:
+        upgraded.close()
+
+
+def test_v2_date_migration_adds_description_without_changing_existing_dates(tmp_path):
+    path = tmp_path / "v2-project.aethercod"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE project_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE entity_types (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, icon TEXT NOT NULL, is_builtin INTEGER NOT NULL);
+        CREATE TABLE entities (id TEXT PRIMARY KEY, type_id TEXT NOT NULL, name TEXT NOT NULL, summary TEXT NOT NULL, notes TEXT NOT NULL, color TEXT NOT NULL, remarks TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
+        CREATE TABLE entity_dates (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, date_kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', year INTEGER, date_value TEXT, precision TEXT NOT NULL DEFAULT 'exact', end_year INTEGER, end_date_value TEXT);
+        INSERT INTO schema_meta VALUES ('version', '2');
+        INSERT INTO project_meta VALUES ('name', '旧资料库');
+        INSERT INTO entity_types VALUES ('person', '人物', '♙', 1);
+        INSERT INTO entities VALUES ('123e4567e89b12d3a456426614174000', 'person', '旧词条', '', '', '#7c3aed', '', '2024', '2024', NULL);
+        INSERT INTO entity_dates(id,entity_id,date_kind,label,year,precision) VALUES ('123e4567e89b12d3a456426614174001','123e4567e89b12d3a456426614174000','custom','旧事件',42,'year');
+    """)
+    conn.commit()
+    conn.close()
+
+    upgraded = connect(path)
+    try:
+        assert schema_version(upgraded) == 3
+        row = upgraded.execute("SELECT label,year,description FROM entity_dates").fetchone()
+        assert tuple(row) == ("旧事件", 42, "")
     finally:
         upgraded.close()

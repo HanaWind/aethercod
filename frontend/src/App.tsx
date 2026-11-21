@@ -1,5 +1,5 @@
 import { ActionDialogProvider, useActionDialog } from "./ActionDialog";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import { AnimatePresence, LayoutGroup, MotionConfig, MotionGlobalConfig, motion, useReducedMotion } from "framer-motion";
 import {
   BookOpen,
   CalendarDays,
@@ -16,16 +16,18 @@ import {
   History,
   Link2,
   LockKeyhole,
-  Maximize2,
-  Minimize2,
+  Copy,
+  Minus,
   Moon,
   Network,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Search,
+  Save,
   Settings2,
   Sparkles,
+  Square,
   Sun,
   Trash2,
   UserRound,
@@ -33,7 +35,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   desktopApi,
@@ -48,12 +50,14 @@ import {
   type TimelineEntry,
 } from "./api";
 import ColorPicker from "./ColorPicker";
+import AmbientParticles from "./AmbientParticles";
 import Dropdown from "./Dropdown";
 import { formatWorldDate } from "./worldDate";
 import GraphView from "./GraphView";
 import SettingsView from "./SettingsView";
 import TimelineView from "./TimelineView";
 import ElasticScroll from "./ElasticScroll";
+import { propertyLayout } from "./propertyLayout";
 import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
 
 const TYPE_ICONS: Record<string, typeof UserRound> = {
@@ -74,14 +78,54 @@ function TypeIcon({ type, size = 15 }: { type: EntityType; size?: number }) {
 }
 
 function App() {
+  const [particlesEnabled, setParticlesEnabled] = useState(
+    () => localStorage.getItem("aethercod-particles") !== "off",
+  );
+  const [transitionsEnabled, setTransitionsEnabled] = useState(
+    () => localStorage.getItem("aethercod-transitions") !== "off",
+  );
+  const prefersReducedMotion = useReducedMotion();
+  const motionEnabled = transitionsEnabled && !prefersReducedMotion;
+
+  useLayoutEffect(() => {
+    MotionGlobalConfig.skipAnimations = !motionEnabled;
+    return () => { MotionGlobalConfig.skipAnimations = false; };
+  }, [motionEnabled]);
+
   return (
-    <ActionDialogProvider>
-      <Workspace />
-    </ActionDialogProvider>
+    <MotionConfig reducedMotion={motionEnabled ? "never" : "always"}>
+      <ActionDialogProvider>
+        <Workspace
+          motionEnabled={motionEnabled}
+          particlesEnabled={particlesEnabled}
+          transitionsEnabled={transitionsEnabled}
+          onParticlesChange={(enabled) => {
+            localStorage.setItem("aethercod-particles", enabled ? "on" : "off");
+            setParticlesEnabled(enabled);
+          }}
+          onTransitionsChange={(enabled) => {
+            localStorage.setItem("aethercod-transitions", enabled ? "on" : "off");
+            setTransitionsEnabled(enabled);
+          }}
+        />
+      </ActionDialogProvider>
+    </MotionConfig>
   );
 }
 
-function Workspace() {
+function Workspace({
+  motionEnabled,
+  particlesEnabled,
+  transitionsEnabled,
+  onParticlesChange,
+  onTransitionsChange,
+}: {
+  motionEnabled: boolean;
+  particlesEnabled: boolean;
+  transitionsEnabled: boolean;
+  onParticlesChange: (enabled: boolean) => void;
+  onTransitionsChange: (enabled: boolean) => void;
+}) {
   const actionDialog = useActionDialog();
   const [state, setState] = useState<ProjectState>({
     project: null,
@@ -89,6 +133,8 @@ function Workspace() {
     entities: [],
     writable: false,
     read_only: false,
+    save_mode: "realtime",
+    save_interval: 1,
   });
   const [activeView, setActiveView] = useState<
     "entries" | "timeline" | "graph" | "settings"
@@ -106,8 +152,10 @@ function Workspace() {
   const [openTypeIds, setOpenTypeIds] = useState<Record<string, boolean>>({});
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [windowMaximized, setWindowMaximized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [compactWindow, setCompactWindow] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -126,6 +174,7 @@ function Workspace() {
     description: "",
   });
   const [error, setError] = useState("");
+  const [paletteNoMatch, setPaletteNoMatch] = useState(false);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [globalTimeline, setGlobalTimeline] = useState<TimelineEntry[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -133,6 +182,7 @@ function Workspace() {
   const [categoryEditing, setCategoryEditing] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState("");
   const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [] });
+  const [graphFilterIds, setGraphFilterIds] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<{
     kind: "type" | "entity" | "library";
     id: string;
@@ -145,22 +195,59 @@ function Workspace() {
     label: "",
     reverse_label: "",
   });
-  const [newDate, setNewDate] = useState({ label: "", year: "" });
+  const [newDate, setNewDate] = useState({
+    label: "",
+    year: "",
+    description: "",
+  });
   const [revision, setRevision] = useState(0);
   const revisionRef = useRef(0);
   const projectPath = useRef<string | undefined>(undefined);
   const entityRequest = useRef(0);
   const historyEntity = useRef("");
-  const pendingDraft = useRef<{ entity: Entity; version: number } | null>(null);
-  const pendingSave = useRef<{
-    promise: Promise<void>;
-    version: number;
-  } | null>(null);
+  const pendingDrafts = useRef(new Map<string, { entity: Entity; version: number }>());
+  const pendingSaves = useRef(
+    new Map<string, { promise: Promise<void>; version: number }>(),
+  );
   const paletteInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     localStorage.setItem("aethercod-theme", theme);
   }, [theme]);
+
+  const refreshWindowState = useCallback(async () => {
+    const api = desktopApi();
+    if (api) setWindowMaximized(await api.window_maximized());
+  }, []);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void refreshWindowState().catch(() => undefined), 80);
+    };
+    schedule();
+    window.addEventListener("pywebviewready", schedule);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("focus", schedule);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pywebviewready", schedule);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("focus", schedule);
+    };
+  }, [refreshWindowState]);
+
+  useEffect(() => {
+    const resize = () => {
+      const compact = window.innerWidth < 900;
+      setCompactWindow(compact);
+      if (compact) setSidebarOpen(false);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
 
   const syncState = useCallback((next: ProjectState) => {
     setState(next);
@@ -168,7 +255,8 @@ function Workspace() {
     if (path !== projectPath.current || !next.project) {
       projectPath.current = path;
       entityRequest.current += 1;
-      pendingDraft.current = null;
+      pendingDrafts.current.clear();
+      pendingSaves.current.clear();
       setDirty(false);
       setOpenTypeIds({});
       setActiveTypeId("");
@@ -177,6 +265,7 @@ function Workspace() {
       setTimeline([]);
       setGlobalTimeline([]);
       setGraph({ nodes: [], edges: [] });
+      setGraphFilterIds([]);
       setHistory([]);
       historyEntity.current = "";
       setActiveView("entries");
@@ -223,13 +312,13 @@ function Workspace() {
     if (request !== entityRequest.current) return;
     if (reveal) setActiveView("entries");
     setSelectedId(id);
-    setDraft(entity);
+    const pending = pendingDrafts.current.get(id);
+    setDraft(pending?.entity ?? entity);
     if (entity && reveal) {
       setActiveTypeId(entity.type_id);
       setOpenTypeIds((current) => ({ ...current, [entity.type_id]: true }));
     }
-    pendingDraft.current = null;
-    setDirty(false);
+    setDirty(pendingDrafts.current.size > 0);
     setShowRelationForm(false);
     setTimeline(events);
     setHistory(versions);
@@ -239,9 +328,12 @@ function Workspace() {
   const flushDraft = useCallback(async () => {
     const api = desktopApi();
     if (!api) return false;
-    while (pendingDraft.current) {
-      const change = pendingDraft.current;
-      if (!pendingSave.current) {
+    while (pendingDrafts.current.size > 0) {
+      const [entityId, change] = pendingDrafts.current.entries().next().value as [
+        string,
+        { entity: Entity; version: number },
+      ];
+      if (!pendingSaves.current.has(entityId)) {
         const path = projectPath.current;
         setSaving(true);
         const promise = api
@@ -255,10 +347,10 @@ function Workspace() {
                 saved,
               ].sort((left, right) => left.name.localeCompare(right.name)),
             }));
-            if (pendingDraft.current?.version === change.version) {
-              pendingDraft.current = null;
-              setDraft(saved);
-              setDirty(false);
+            if (pendingDrafts.current.get(entityId)?.version === change.version) {
+              pendingDrafts.current.delete(entityId);
+              if (selectedId === saved.id) setDraft(saved);
+              setDirty(pendingDrafts.current.size > 0);
               setTimeline(
                 saved.dates.map((date) => ({
                   id: date.id ?? "",
@@ -267,6 +359,7 @@ function Workspace() {
                   type_id: saved.type_id,
                   date_kind: date.date_kind,
                   label: date.label ?? "",
+                  description: date.description ?? "",
                   year: date.year ?? null,
                   date_value: date.date_value ?? null,
                   precision: date.precision ?? "exact",
@@ -280,18 +373,18 @@ function Workspace() {
               setHistory(await api.get_history(saved.id));
           })
           .finally(() => {
-            pendingSave.current = null;
+            pendingSaves.current.delete(entityId);
             setSaving(false);
           });
-        pendingSave.current = { promise, version: change.version };
+        pendingSaves.current.set(entityId, { promise, version: change.version });
       }
-      const attempt = pendingSave.current;
+      const attempt = pendingSaves.current.get(entityId)!;
       try {
         await attempt.promise;
       } catch (reason) {
         if (
-          pendingDraft.current &&
-          pendingDraft.current.version !== attempt.version
+          pendingDrafts.current.has(entityId) &&
+          pendingDrafts.current.get(entityId)?.version !== attempt.version
         )
           continue;
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -299,13 +392,12 @@ function Workspace() {
       }
     }
     return true;
-  }, []);
+  }, [selectedId]);
 
   const navigateTo = async (
     view: "entries" | "timeline" | "graph" | "settings",
   ) => {
     setContextMenu(null);
-    if (!(await flushDraft())) return;
     setActiveView(view);
     const api = desktopApi();
     if (!api || !state.project) return;
@@ -347,6 +439,13 @@ function Workspace() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
+  };
+
+  const showRelatedGraph = async () => {
+    if (!draft) return;
+    if (!(await flushDraft())) return;
+    setGraphFilterIds([draft.id]);
+    await navigateTo("graph");
   };
 
   const openContextMenu = (
@@ -483,10 +582,19 @@ function Workspace() {
   }, [activeView, state.entities, loadEntity, selectedId]);
 
   useEffect(() => {
-    if (!dirty || !state.writable) return;
-    const timer = window.setTimeout(() => void flushDraft(), 620);
+    if (!dirty || !state.writable || state.save_mode !== "interval") return;
+    const timer = window.setInterval(
+      () => void flushDraft(),
+      Math.max(1, state.save_interval) * 60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [dirty, flushDraft, state.save_interval, state.save_mode, state.writable]);
+
+  useEffect(() => {
+    if (!dirty || !state.writable || state.save_mode !== "realtime") return;
+    const timer = window.setTimeout(() => void flushDraft(), 360);
     return () => window.clearTimeout(timer);
-  }, [dirty, flushDraft, revision, state.writable]);
+  }, [dirty, flushDraft, revision, state.save_mode, state.writable]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -495,6 +603,10 @@ function Workspace() {
         setPaletteOpen(true);
         setPaletteQuery("");
         setPaletteIndex(0);
+        setPaletteNoMatch(false);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void flushDraft();
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
         setCreateOpen(false);
@@ -504,7 +616,7 @@ function Workspace() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [flushDraft]);
 
   useEffect(() => {
     if (paletteOpen) window.setTimeout(() => paletteInput.current?.focus(), 40);
@@ -519,19 +631,36 @@ function Workspace() {
     );
   }, [paletteQuery, state.entities]);
 
+  const onPaletteKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setPaletteIndex((index) => Math.min(index + 1, paletteItems.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setPaletteIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (paletteItems[paletteIndex]) {
+        void selectEntity(paletteItems[paletteIndex]);
+        setPaletteOpen(false);
+      } else {
+        setPaletteNoMatch(true);
+      }
+    }
+  };
+
   const updateDraft = (update: (current: Entity) => Entity) => {
-    const current = pendingDraft.current?.entity ?? draft;
+    const current = (draft && pendingDrafts.current.get(draft.id)?.entity) ?? draft;
     if (!current || !state.writable) return;
     const entity = update(current);
     const version = ++revisionRef.current;
-    pendingDraft.current = { entity, version };
+    pendingDrafts.current.set(entity.id, { entity, version });
     setDraft(entity);
     setRevision(version);
     setDirty(true);
   };
 
   const selectEntity = async (entity: EntitySummary) => {
-    if (!(await flushDraft())) return;
     try {
       await loadEntity(entity.id);
     } catch (reason) {
@@ -550,10 +679,7 @@ function Workspace() {
     const workspace = document.querySelector(".workspace");
     let animation: Animation | undefined;
     try {
-      if (
-        workspace &&
-        !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
+      if (workspace && motionEnabled) {
         animation = workspace.animate(
           [
             { transform: "scale(1)", opacity: 1 },
@@ -567,6 +693,7 @@ function Workspace() {
         await animation.finished;
       }
       await api.window_action(action);
+      if (action === "maximize") await refreshWindowState();
       if (action === "maximize" && animation) {
         animation.reverse();
         await animation.finished;
@@ -586,6 +713,16 @@ function Workspace() {
         syncState(next);
         setError("");
       }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const closeProject = async () => {
+    if (!(await flushDraft())) return;
+    try {
+      const next = await desktopApi()?.close_project();
+      if (next) syncState(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -628,7 +765,7 @@ function Workspace() {
 
   const createEntity = async (type: EntityType) => {
     const api = desktopApi();
-    if (!api || !state.writable || !(await flushDraft())) return;
+    if (!api || !state.writable) return;
     try {
       const entity = await api.create_entity(type.id);
       entity.name = `未命名${type.name}`;
@@ -640,7 +777,8 @@ function Workspace() {
       );
       if (missingRequired) {
         const version = ++revisionRef.current;
-        pendingDraft.current = { entity, version };
+        setRevision(version);
+        pendingDrafts.current.set(entity.id, { entity, version });
         setSelectedId(entity.id);
         setDraft(entity);
         setActiveView("entries");
@@ -648,12 +786,14 @@ function Workspace() {
         setDirty(true);
         setError("请填写必填属性后保存词条");
       } else {
-        const saved = await api.save_entity(entity);
-        setState((current) => ({
-          ...current,
-          entities: [...current.entities, saved],
-        }));
-        await loadEntity(saved.id);
+        const version = ++revisionRef.current;
+        setRevision(version);
+        pendingDrafts.current.set(entity.id, { entity, version });
+        setSelectedId(entity.id);
+        setDraft(entity);
+        setActiveView("entries");
+        setTimeline([]);
+        setDirty(true);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -667,11 +807,12 @@ function Workspace() {
     const date: EntityDate = {
       date_kind: "custom",
       label: newDate.label.trim() || "历史节点",
+      description: newDate.description.trim(),
       year,
       precision: "year",
     };
     updateDraft((current) => ({ ...current, dates: [...current.dates, date] }));
-    setNewDate({ label: "", year: "" });
+    setNewDate({ label: "", year: "", description: "" });
   };
 
   const addRelation = async (event: React.FormEvent) => {
@@ -735,9 +876,9 @@ function Workspace() {
       return;
     try {
       if (selectedId === entityId) {
-        pendingDraft.current = null;
-        setDirty(false);
-        await pendingSave.current?.promise.catch(() => undefined);
+        pendingDrafts.current.delete(entityId);
+        setDirty(pendingDrafts.current.size > 0);
+        await pendingSaves.current.get(entityId)?.promise.catch(() => undefined);
       }
       await desktopApi()?.delete_entity(entityId);
       setState((current) => ({
@@ -797,28 +938,33 @@ function Workspace() {
 
   const typeById = (id: string) => state.types.find((type) => type.id === id);
   const reportError = useCallback((message: string) => setError(message), []);
+  const properties = draft ? propertyLayout(draft) : null;
+  const renderProperty = (field: FieldDefinition) => (
+    <PropertyEditor
+      key={field.id}
+      field={field}
+      value={draft?.custom_fields[field.name]}
+      disabled={!state.writable}
+      entities={state.entities}
+      allowEmpty={draft?.type_id !== "place" || field.name !== "地点类别"}
+      onChange={(value) =>
+        updateDraft((current) => ({
+          ...current,
+          custom_fields: { ...current.custom_fields, [field.name]: value },
+        }))
+      }
+    />
+  );
+  const updateAliases = (aliases: string[]) =>
+    updateDraft((current) => ({ ...current, aliases }));
 
   return (
     <div
-      className={`app-shell theme-${theme}`}
+      className={`app-shell theme-${theme}${motionEnabled ? "" : " motion-disabled"}`}
       style={{ "--accent": draft?.color || "#7C3AED" } as React.CSSProperties}
       onClick={() => contextMenu && setContextMenu(null)}
     >
-      <div className="ambient-particles" aria-hidden="true">
-        {Array.from({ length: 18 }, (_, index) => (
-          <i
-            key={index}
-            style={
-              {
-                "--particle-x": `${(index * 47 + 5) % 97}%`,
-                "--particle-y": `${(index * 61 + 9) % 96}%`,
-                "--particle-delay": `${-(index * 1.13)}s`,
-                "--particle-duration": `${17 + (index % 6) * 2}s`,
-              } as React.CSSProperties
-            }
-          />
-        ))}
-      </div>
+      {particlesEnabled && <AmbientParticles theme={theme} />}
       <header className="titlebar pywebview-drag-region">
         <div className="brand-lockup pywebview-drag-region">
           <div className="brand-mark">
@@ -838,6 +984,27 @@ function Workspace() {
               <span />
               {saving ? "正在同步" : dirty ? "尚未保存" : "已同步至本地库"}
             </div>
+          )}
+          {state.project && state.writable && (
+            <button
+              className="topbar-save"
+              disabled={!dirty || saving}
+              title="保存所有未保存修改（Ctrl+S）"
+              onClick={() => void flushDraft()}
+            >
+              <Save size={13} />
+              保存
+            </button>
+          )}
+          {state.project && (
+            <button
+              className="close-library-pill"
+              title="关闭当前资料库"
+              onClick={() => void closeProject()}
+            >
+              <FolderOpen size={13} />
+              <span>关闭资料库</span>
+            </button>
           )}
           {state.project && (
             <button
@@ -861,14 +1028,15 @@ function Workspace() {
             title="最小化"
             onClick={() => void changeWindow("minimize")}
           >
-            <Minimize2 size={14} />
+            <Minus size={16} aria-hidden="true" />
           </button>
           <button
             className="icon-button window-control"
-            title="最大化"
+            title={windowMaximized ? "还原窗口" : "最大化窗口"}
+            aria-label={windowMaximized ? "还原窗口" : "最大化窗口"}
             onClick={() => void changeWindow("maximize")}
           >
-            <Maximize2 size={13} />
+            {windowMaximized ? <Copy size={13} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />}
           </button>
           <button
             className="icon-button window-control close-control"
@@ -919,7 +1087,7 @@ function Workspace() {
                   }}
                 >
                   <Search size={15} />
-                  <span>搜索词条</span>
+                  <span className="sidebar-action-label">搜索词条</span>
                   <kbd>
                     <Command size={11} /> K
                   </kbd>
@@ -930,14 +1098,14 @@ function Workspace() {
                     onClick={() => void openProject()}
                   >
                     <FolderOpen size={14} />
-                    打开资料库
+                    <span className="sidebar-action-label">打开资料库</span>
                   </button>
                   <button
                     className="subtle-action"
                     onClick={() => setCreateOpen(true)}
                   >
                     <FilePlus2 size={14} />
-                    新建
+                    <span className="sidebar-action-label">新建</span>
                   </button>
                   <button
                     className="subtle-action workspace-settings-action"
@@ -952,7 +1120,7 @@ function Workspace() {
                     }}
                   >
                     <Settings2 size={14} />
-                    设置
+                    <span className="sidebar-action-label">设置</span>
                   </button>
                 </div>
                 <nav className="workspace-nav" aria-label="工作区">
@@ -961,7 +1129,7 @@ function Workspace() {
                     onClick={() => void navigateTo("entries")}
                   >
                     <BookOpen size={15} />
-                    词条
+                    <span className="sidebar-action-label">词条</span>
                   </button>
                   <button
                     className={activeView === "timeline" ? "active" : ""}
@@ -973,7 +1141,7 @@ function Workspace() {
                     }
                   >
                     <CalendarDays size={15} />
-                    时间线
+                    <span className="sidebar-action-label">时间线</span>
                   </button>
                   <button
                     className={activeView === "graph" ? "active" : ""}
@@ -985,7 +1153,7 @@ function Workspace() {
                     }
                   >
                     <Network size={15} />
-                    关系图谱
+                    <span className="sidebar-action-label">关系图谱</span>
                   </button>
                 </nav>
               </div>
@@ -1044,7 +1212,7 @@ function Workspace() {
                             }
                           >
                             <TypeIcon type={type} size={14} />
-                            <span>{type.name}</span>
+                            <span className="sidebar-action-label">{type.name}</span>
                             <span className="type-count">
                               {
                                 state.entities.filter(
@@ -1225,22 +1393,6 @@ function Workspace() {
                     <Trash2 size={15} />
                   </button>
                 )}
-              {state.project && (
-                <button
-                  className="icon-button"
-                  title="关闭资料库"
-                  onClick={() => {
-                    void flushDraft()
-                      .then((saved) => {
-                        if (saved)
-                          return desktopApi()?.close_project().then(syncState);
-                      })
-                      .catch((reason: Error) => setError(reason.message));
-                  }}
-                >
-                  <X size={15} />
-                </button>
-              )}
               {activeView === "entries" && draft && (
                 <button
                   className="icon-button"
@@ -1248,6 +1400,16 @@ function Workspace() {
                   onClick={() => void navigateTo("timeline")}
                 >
                   <CalendarDays size={15} />
+                </button>
+              )}
+              {activeView === "entries" && draft && (
+                <button
+                  className={`toolbar-text-action ${compactWindow ? "compact" : ""}`}
+                  title="查看当前词条及其直接关联图谱"
+                  onClick={() => void showRelatedGraph()}
+                >
+                  <Network size={14} />
+                  {!compactWindow && <span>关联图谱</span>}
                 </button>
               )}
               {activeView === "entries" && (
@@ -1285,6 +1447,10 @@ function Workspace() {
               onProjectUpdated={syncState}
               onChanged={refreshProject}
               onError={reportError}
+              particlesEnabled={particlesEnabled}
+              transitionsEnabled={transitionsEnabled}
+              onParticlesChange={onParticlesChange}
+              onTransitionsChange={onTransitionsChange}
             />
           ) : activeView === "timeline" && state.project ? (
             <TimelineView
@@ -1297,6 +1463,10 @@ function Workspace() {
             <GraphView
               graph={graph}
               types={state.types}
+              entities={state.entities}
+              selectedIds={graphFilterIds}
+              onFilterChange={setGraphFilterIds}
+              motionEnabled={motionEnabled}
               onSelect={selectById}
               onDelete={(id, name) => void deleteGraphNode(id, name)}
             />
@@ -1344,7 +1514,13 @@ function Workspace() {
                   transition={{ duration: 0.18 }}
                 >
                   <div className="document-glow" />
-                  <div className="document-content">
+                  <motion.div
+                    key={state.writable ? "edit" : "read"}
+                    className="document-content"
+                    initial={motionEnabled ? { opacity: 0.18, y: 4 } : false}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.24, ease: "easeOut" }}
+                  >
                     <div className="document-eyebrow">
                       <span
                         className="type-badge"
@@ -1437,25 +1613,13 @@ function Workspace() {
 
                     <div className="doc-divider" />
 
-                    <div className="metadata-line">
-                      <span>别名</span>
-                      <input
-                        className="inline-input"
-                        value={draft.aliases.join("，")}
-                        onChange={(event) =>
-                          updateDraft((current) => ({
-                            ...current,
-                            aliases: event.target.value
-                              .split(/[，,]/)
-                              .map((item) => item.trim())
-                              .filter(Boolean),
-                          }))
-                        }
-                        placeholder="添加别名"
-                        disabled={!state.writable}
-                      />
-                    </div>
-                    {Boolean(draft.fields?.length) && (
+                    {!properties?.aliasesInGrid && (
+                      <label className="metadata-line">
+                        <span>别名</span>
+                        <AliasInput aliases={draft.aliases} disabled={!state.writable} onChange={updateAliases} />
+                      </label>
+                    )}
+                    {properties && (properties.aliasesInGrid || properties.fields.length > 0) && (
                       <section className="document-section properties-section">
                         <div className="section-heading">
                           <div>
@@ -1483,24 +1647,21 @@ function Workspace() {
                                 damping: 36,
                               }}
                             >
-                              {draft.fields?.map((field) => (
-                                <PropertyEditor
-                                  key={field.id}
-                                  field={field}
-                                  value={draft.custom_fields[field.name]}
-                                  disabled={!state.writable}
-                                  entities={state.entities}
-                                  onChange={(value) =>
-                                    updateDraft((current) => ({
-                                      ...current,
-                                      custom_fields: {
-                                        ...current.custom_fields,
-                                        [field.name]: value,
-                                      },
-                                    }))
-                                  }
-                                />
-                              ))}
+                              {properties.aliasesInGrid && (
+                                <label className="property-cell">
+                                  <span>别名</span>
+                                  <AliasInput aliases={draft.aliases} disabled={!state.writable} onChange={updateAliases} />
+                                </label>
+                              )}
+                              {properties.fields.map(renderProperty)}
+                              {properties.additional.length > 0 && (
+                                <details className="additional-properties">
+                                  <summary>其他属性</summary>
+                                  <div className="property-grid">
+                                    {properties.additional.map(renderProperty)}
+                                  </div>
+                                </details>
+                              )}
                             </motion.div>
                           )}
                         </AnimatePresence>
@@ -1681,27 +1842,94 @@ function Workspace() {
                             <h2>
                               时间线{" "}
                               <span className="heading-count">
-                                {timeline.length}
+                                {draft.dates.length}
                               </span>
                             </h2>
                           </div>
                         </div>
                         <div className="timeline-list">
-                          {timeline.map((event) => (
-                            <div className="timeline-item" key={event.id}>
+                          {draft.dates.map((date, index) => (
+                            <div className="timeline-item timeline-editor-item" key={date.id ?? index}>
                               <span className="timeline-node" />
-                              <span className="timeline-year">
-                                {formatWorldDate(
-                                  event,
-                                  state.project?.era_name ?? "",
+                              <div className="timeline-date-edit-grid">
+                                <input
+                                  aria-label="事件名称"
+                                  value={date.label ?? ""}
+                                  placeholder="事件名称"
+                                  disabled={!state.writable}
+                                  onChange={(event) =>
+                                    updateDraft((current) => ({
+                                      ...current,
+                                      dates: current.dates.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, label: event.target.value }
+                                          : item,
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <input
+                                  aria-label="事件年份"
+                                  className="year-input"
+                                  inputMode="numeric"
+                                  value={date.year ?? date.date_value ?? ""}
+                                  placeholder="年份"
+                                  disabled={!state.writable}
+                                  onChange={(event) => {
+                                    const raw = event.target.value;
+                                    updateDraft((current) => ({
+                                      ...current,
+                                      dates: current.dates.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? {
+                                              ...item,
+                                              year: raw === "" ? null : Number(raw),
+                                              date_value: null,
+                                              precision: "year",
+                                            }
+                                          : item,
+                                      ),
+                                    }));
+                                  }}
+                                />
+                                {state.writable && (
+                                  <button
+                                    className="icon-button compact"
+                                    title="删除时间节点"
+                                    onClick={() =>
+                                      updateDraft((current) => ({
+                                        ...current,
+                                        dates: current.dates.filter(
+                                          (_, itemIndex) => itemIndex !== index,
+                                        ),
+                                      }))
+                                    }
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
                                 )}
-                              </span>
-                              <span className="timeline-label">
-                                {event.label || event.date_kind}
-                              </span>
+                                <textarea
+                                  className="timeline-description-input"
+                                  aria-label="事件具体说明"
+                                  value={date.description ?? ""}
+                                  placeholder="事件具体说明"
+                                  rows={2}
+                                  disabled={!state.writable}
+                                  onChange={(event) =>
+                                    updateDraft((current) => ({
+                                      ...current,
+                                      dates: current.dates.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, description: event.target.value }
+                                          : item,
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
                             </div>
                           ))}
-                          {!timeline.length && (
+                          {!draft.dates.length && (
                             <span className="empty-inline">暂无纪年节点</span>
                           )}
                         </div>
@@ -1729,6 +1957,19 @@ function Workspace() {
                               }
                               placeholder="年份"
                             />
+                            <textarea
+                              className="new-date-description"
+                              aria-label="事件具体说明"
+                              value={newDate.description}
+                              onChange={(event) =>
+                                setNewDate((value) => ({
+                                  ...value,
+                                  description: event.target.value,
+                                }))
+                              }
+                              placeholder="事件具体说明"
+                              rows={2}
+                            />
                             <button
                               className="icon-button compact"
                               title="添加时间节点"
@@ -1749,7 +1990,7 @@ function Workspace() {
                       <span>创建于 {formatDate(draft.created_at)}</span>
                       <span>更新于 {formatDate(draft.updated_at)}</span>
                     </footer>
-                  </div>
+                  </motion.div>
                 </motion.article>
               </AnimatePresence>
             </ElasticScroll>
@@ -2055,23 +2296,9 @@ function Workspace() {
                   onChange={(event) => {
                     setPaletteQuery(event.target.value);
                     setPaletteIndex(0);
+                    setPaletteNoMatch(false);
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowDown") {
-                      event.preventDefault();
-                      setPaletteIndex((index) =>
-                        Math.min(index + 1, paletteItems.length - 1),
-                      );
-                    }
-                    if (event.key === "ArrowUp") {
-                      event.preventDefault();
-                      setPaletteIndex((index) => Math.max(index - 1, 0));
-                    }
-                    if (event.key === "Enter" && paletteItems[paletteIndex]) {
-                      void selectEntity(paletteItems[paletteIndex]);
-                      setPaletteOpen(false);
-                    }
-                  }}
+                  onKeyDown={onPaletteKeyDown}
                   placeholder="搜索词条或跳转到…"
                 />
                 <kbd>ESC</kbd>
@@ -2107,7 +2334,12 @@ function Workspace() {
                   );
                 })}
                 {!paletteItems.length && (
-                  <div className="palette-empty">没有匹配的词条</div>
+                  <div
+                    className={`palette-empty ${paletteNoMatch ? "palette-no-match" : ""}`}
+                    role={paletteNoMatch ? "alert" : undefined}
+                  >
+                    {paletteNoMatch ? "未找到匹配内容" : "没有匹配的词条"}
+                  </div>
                 )}
               </div>
               <div className="palette-footer">
@@ -2311,17 +2543,45 @@ function Workspace() {
   );
 }
 
+function AliasInput({
+  aliases,
+  disabled,
+  onChange,
+}: {
+  aliases: string[];
+  disabled: boolean;
+  onChange: (aliases: string[]) => void;
+}) {
+  const [input, setInput] = useState<string | null>(null);
+  return (
+    <input
+      className="inline-input"
+      value={input ?? aliases.join("，")}
+      placeholder="添加别名"
+      disabled={disabled}
+      onBlur={() => setInput(null)}
+      onChange={(event) => {
+        const text = event.target.value;
+        setInput(text);
+        onChange(text.split(/[，,]/).map((alias) => alias.trim()).filter(Boolean));
+      }}
+    />
+  );
+}
+
 function PropertyEditor({
   field,
   value,
   disabled,
   entities,
+  allowEmpty = true,
   onChange,
 }: {
   field: FieldDefinition;
   value: unknown;
   disabled: boolean;
   entities: EntitySummary[];
+  allowEmpty?: boolean;
   onChange: (value: unknown) => void;
 }) {
   const textValue = value === null || value === undefined ? "" : String(value);
@@ -2330,11 +2590,12 @@ function PropertyEditor({
     control = (
       <Dropdown
         label={field.name}
+        placeholder={allowEmpty ? "未设置" : "请选择地点类别"}
         value={textValue}
         onChange={(value) => onChange(value || undefined)}
         disabled={disabled}
         options={[
-          { value: "", label: "未设置" },
+          ...(allowEmpty ? [{ value: "", label: "未设置" }] : []),
           ...field.options.map((option) => ({ value: option, label: option })),
         ]}
       />
@@ -2479,6 +2740,7 @@ function EditableText({
         ? "summary-input"
         : "notes-editor";
   const Component = kind === "title" ? "h1" : kind === "summary" ? "p" : "div";
+  if (kind === "notes" && disabled && !value.trim()) return null;
   const candidates = completion
     ? suggestions
         .filter((entity) =>

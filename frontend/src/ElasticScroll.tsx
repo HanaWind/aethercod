@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { motion, useReducedMotionConfig } from "framer-motion";
 import { useEffect, useRef, useState, type ReactNode, type WheelEvent } from "react";
 
 export default function ElasticScroll({
@@ -9,6 +9,7 @@ export default function ElasticScroll({
   children: ReactNode;
 }) {
   const [offset, setOffset] = useState(0);
+  const reduceMotion = useReducedMotionConfig();
   const resetTimer = useRef<number | undefined>(undefined);
 
   useEffect(
@@ -17,6 +18,7 @@ export default function ElasticScroll({
   );
 
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (reduceMotion) return;
     const element = event.currentTarget;
     if (
       event.target instanceof Element &&
@@ -38,7 +40,7 @@ export default function ElasticScroll({
     <div className={className} onWheel={handleWheel}>
       <motion.div
         className="elastic-scroll-content"
-        animate={{ y: offset }}
+        animate={{ y: reduceMotion ? 0 : offset }}
         transition={{ type: "spring", stiffness: 420, damping: 28, mass: 0.55 }}
       >
         {children}

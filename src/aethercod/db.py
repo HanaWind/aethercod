@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUILTIN_TYPES = [
     ("person", "人物", "♙"),
     ("polity", "国家/政权", "♜"),
@@ -18,6 +18,7 @@ BUILTIN_TYPES = [
     ("concept", "概念/魔法", "∞"),
 ]
 BUILTIN_FIELD_NAMESPACE = uuid.UUID("caec4156-148d-4339-8f42-8a81113d85a9")
+PLACE_CATEGORIES = ("大陆", "国家辖区", "行省", "城市", "村镇", "遗迹", "自然地貌", "其他")
 BUILTIN_FIELDS = {
     "person": [
         ("中文名", "text", False, []),
@@ -37,8 +38,8 @@ BUILTIN_FIELDS = {
         ),
         ("面积", "text", False, []),
         ("人口", "integer", False, []),
-        ("地理概述", "textarea", False, []),
         ("文化与经济", "textarea", False, []),
+        ("地理概述", "textarea", False, []),
     ],
     "place": [
         ("正式名称", "text", False, []),
@@ -47,13 +48,23 @@ BUILTIN_FIELDS = {
             "地点类别",
             "choice",
             False,
-            ["大陆", "国家辖区", "行省", "城市", "村镇", "遗迹", "自然地貌", "其他"],
+            list(PLACE_CATEGORIES),
         ),
         ("地位", "text", False, []),
         ("面积", "text", False, []),
         ("人口", "integer", False, []),
         ("地理概述", "textarea", False, []),
         ("经济文化与特色", "textarea", False, []),
+        ("经济", "textarea", False, []),
+        ("地区特色", "textarea", False, []),
+        ("所属时代/文明", "text", False, []),
+        ("保存状况", "text", False, []),
+        ("遗迹特征", "textarea", False, []),
+        ("地貌类型", "text", False, []),
+        ("气候与生态", "textarea", False, []),
+        ("地理特征", "textarea", False, []),
+        ("环境概况", "textarea", False, []),
+        ("备注特色", "textarea", False, []),
     ],
     "organization": [("宗旨", "textarea", False, []), ("职能", "textarea", False, [])],
     "branch": [("职能", "textarea", False, []), ("规模", "integer", False, [])],
@@ -129,7 +140,7 @@ CREATE TABLE IF NOT EXISTS relations (
 );
 CREATE TABLE IF NOT EXISTS entity_dates (
   id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES entities(id), date_kind TEXT NOT NULL,
-  label TEXT NOT NULL DEFAULT '', year INTEGER, date_value TEXT, precision TEXT NOT NULL DEFAULT 'exact',
+  label TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', year INTEGER, date_value TEXT, precision TEXT NOT NULL DEFAULT 'exact',
   end_year INTEGER, end_date_value TEXT
 );
 CREATE TABLE IF NOT EXISTS entity_history (
@@ -191,6 +202,11 @@ def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO schema_meta(key, value) VALUES('migrated_from', '1')")
 
 
+def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Add descriptive text to timeline dates without changing existing rows."""
+    _add_column(conn, "entity_dates", "description TEXT NOT NULL DEFAULT ''")
+
+
 def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
@@ -228,6 +244,8 @@ def initialize(conn: sqlite3.Connection) -> None:
                 conn.execute(statement)
         if version < 2:
             migrate_v1_to_v2(conn)
+        if version < 3:
+            migrate_v2_to_v3(conn)
         conn.execute(
             "INSERT INTO schema_meta(key,value) VALUES('version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),

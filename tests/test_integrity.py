@@ -139,8 +139,10 @@ def test_migration_failure_rolls_back_ddl_and_data(tmp_path, monkeypatch):
     assert list(conn.iterdump()) == before
     monkeypatch.setattr(db, "migrate_v1_to_v2", original)
     initialize(conn)
-    assert schema_version(conn) == 2
-    assert "precision" in {row[1] for row in conn.execute("PRAGMA table_info(entity_dates)")}
+    assert schema_version(conn) == 3
+    assert {"precision", "description"} <= {
+        row[1] for row in conn.execute("PRAGMA table_info(entity_dates)")
+    }
     conn.close()
 
 
@@ -309,7 +311,14 @@ def test_default_v2_round_trip_preserves_references_metadata_and_timestamps(proj
     service.fields.create(kind.id, "Flag", "boolean", default_value=False)
     first.custom_fields = {"Peer": second.id, "Flag": False}
     second.custom_fields = {"Peer": first.id}
-    first.dates = [{"date_kind": "birth", "year": -42, "precision": "y"}]
+    first.dates = [
+        {
+            "date_kind": "birth",
+            "year": -42,
+            "precision": "y",
+            "description": "月色下的誓约",
+        }
+    ]
     service.save_entity(first, ["  Ancient Name  "])
     service.save_entity(second)
     service.new_relation(first.id, second.id, "knows")
@@ -318,8 +327,10 @@ def test_default_v2_round_trip_preserves_references_metadata_and_timestamps(proj
     conn.commit()
     payload = export_library(conn)
     assert payload["format_version"] == 2
+    assert payload["schema_version"] == 3
     assert export_library(conn, format_version=1)["format_version"] == 1
     assert payload["entities"][0]["dates"][0]["precision"] == "year"
+    assert payload["entities"][0]["dates"][0]["description"] == "月色下的誓约"
     target = connect(tmp_path / "roundtrip.db")
     try:
         import_library(target, payload)

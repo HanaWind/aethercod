@@ -205,6 +205,7 @@ class TimelineDate:
     precision: str = "exact"
     end_year: int | None = None
     end_date_value: str | None = None
+    description: str = ""
 
     def __post_init__(self) -> None:
         self.id = normalize_uuid(self.id) if self.id else new_uuid()

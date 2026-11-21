@@ -1,6 +1,7 @@
 import { formatWorldDate } from "./worldDate";
 import Dropdown from "./Dropdown";
-import { CalendarDays, ChevronRight, Filter } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { CalendarDays, ChevronRight, ExternalLink, Filter, X } from "lucide-react";
 import { useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
 import ElasticScroll from "./ElasticScroll";
@@ -17,6 +18,7 @@ export default function TimelineView({
   onSelect: (entityId: string) => void;
 }) {
   const [typeId, setTypeId] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(null);
   const filtered = events.filter(
     (event) => !typeId || event.type_id === typeId,
   );
@@ -48,7 +50,7 @@ export default function TimelineView({
               <button
                 className="timeline-card"
                 key={event.id}
-                onClick={() => onSelect(event.entity_id)}
+                onClick={() => setSelectedEvent(event)}
               >
                 <span className="timeline-card-node" />
                 <span className="timeline-card-date">
@@ -74,6 +76,70 @@ export default function TimelineView({
           </div>
         )}
       </ElasticScroll>
+      <AnimatePresence>
+        {selectedEvent && (
+          <motion.div
+            className="modal-scrim timeline-event-scrim"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={() => setSelectedEvent(null)}
+          >
+            <motion.section
+              className="timeline-event-dialog glass-menu"
+              role="dialog"
+              aria-modal="true"
+              aria-label={selectedEvent.label || "时间线事件详情"}
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 4 }}
+              transition={{ type: "spring", stiffness: 380, damping: 32 }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header>
+                <div>
+                  <span className="section-kicker">{era}纪年 · 事件详情</span>
+                  <h2>{selectedEvent.label || selectedEvent.date_kind}</h2>
+                </div>
+                <button
+                  className="icon-button"
+                  title="关闭"
+                  onClick={() => setSelectedEvent(null)}
+                >
+                  <X size={15} />
+                </button>
+              </header>
+              <div className="timeline-event-meta">
+                <CalendarDays size={14} />
+                {formatWorldDate(selectedEvent, era)}
+                <span>·</span>
+                <span>{selectedEvent.name}</span>
+                <span>·</span>
+                <span>
+                  {types.find((type) => type.id === selectedEvent.type_id)?.name ??
+                    "词条"}
+                </span>
+              </div>
+              <p className="timeline-event-description">
+                {selectedEvent.description?.trim() || "暂无事件说明"}
+              </p>
+              <footer>
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    const entityId = selectedEvent.entity_id;
+                    setSelectedEvent(null);
+                    onSelect(entityId);
+                  }}
+                >
+                  <ExternalLink size={14} />
+                  打开关联词条
+                </button>
+              </footer>
+            </motion.section>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

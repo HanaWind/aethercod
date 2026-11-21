@@ -30,6 +30,7 @@ export type EntityDate = {
   id?: string;
   date_kind: string;
   label?: string;
+  description?: string;
   year?: number | null;
   date_value?: string | null;
   precision?: string;
@@ -80,6 +81,8 @@ export type ProjectState = {
   entities: EntitySummary[];
   writable: boolean;
   read_only: boolean;
+  save_mode: "manual" | "interval" | "realtime";
+  save_interval: number;
 };
 
 export type HistoryEntry = {
@@ -115,6 +118,7 @@ export type TimelineEntry = {
   type_id: string;
   date_kind: string;
   label: string;
+  description: string;
   year: number | null;
   date_value: string | null;
   precision: string;
@@ -137,6 +141,10 @@ export type BridgeApi = {
     data: Pick<Project, "name" | "era_name" | "author" | "description">,
   ): Promise<ProjectState>;
   set_read_only(enabled: boolean): Promise<ProjectState>;
+  update_save_settings(
+    save_mode: "manual" | "interval" | "realtime",
+    save_interval: number,
+  ): Promise<ProjectState>;
   list_entities(query?: string, type_id?: string): Promise<EntitySummary[]>;
   list_types(): Promise<EntityType[]>;
   list_fields(type_id: string): Promise<FieldDefinition[]>;
@@ -171,6 +179,7 @@ export type BridgeApi = {
   restore_entity_version(entity_id: string, version: number): Promise<Entity>;
   get_graph(): Promise<GraphData>;
   open_external_url(url: string): Promise<boolean>;
+  window_maximized(): Promise<boolean>;
   window_action(
     action: "minimize" | "maximize" | "restore" | "close",
   ): Promise<void>;
@@ -183,5 +192,6 @@ declare global {
 }
 
 export function desktopApi(): BridgeApi | null {
-  return window.pywebview?.api ?? null;
+  const api = window.pywebview?.api;
+  return typeof api?.get_state === "function" ? api : null;
 }

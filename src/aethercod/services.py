@@ -297,7 +297,7 @@ class TimelineService:
             )
             args.append(normalize(tag))
         sql = (
-            "SELECT d.id,d.entity_id,e.name,e.type_id,d.date_kind,d.label,d.year,d.date_value, "
+            "SELECT d.id,d.entity_id,e.name,e.type_id,d.date_kind,d.label,d.description,d.year,d.date_value, "
             "d.precision,d.end_year,d.end_date_value "
             "FROM entity_dates d JOIN entities e ON e.id=d.entity_id WHERE "
             + " AND ".join(where)

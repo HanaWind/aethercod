@@ -8,6 +8,13 @@ import pytest
 from aethercod.ui.bridge_api import BridgeAPI
 
 
+def test_bridge_empty_state_includes_save_defaults():
+    state = BridgeAPI().get_state()
+    assert state["project"] is None
+    assert state["save_mode"] == "realtime"
+    assert state["save_interval"] == 1
+
+
 def test_bridge_window_control_toggles_maximize():
     class EventHook:
         def __init__(self):
@@ -39,12 +46,36 @@ def test_bridge_window_control_toggles_maximize():
     api.bind_window(window)
 
     api.window_action("maximize")
+    assert api.window_maximized() is True
     api.window_action("maximize")
+    assert api.window_maximized() is False
     window.events.maximized.callbacks[0](window)
+    assert api.window_maximized() is True
     window.events.restored.callbacks[0](window)
 
     assert window.actions == ["maximize", "restore"]
     assert api._maximized is False
+
+
+def test_old_location_template_keeps_values_when_new_fields_are_seeded(tmp_path):
+    api = BridgeAPI()
+    path = tmp_path / "old-location.aethercod"
+    api.create_project(str(path), "位置模板", "纪年")
+    entity = api.create_entity("place")
+    entity["aliases"] = ["旧港"]
+    entity["custom_fields"] = {"地点类别": "城市", "经济文化与特色": "旧版城市记录"}
+    saved = api.save_entity(entity)
+    # Simulate a v3 project created before the conditional fields existed.
+    api._conn.execute("DELETE FROM entity_type_fields WHERE type_id='place' AND name='遗迹特征'")
+    api._conn.commit()
+    api.close_project()
+
+    api.open_project(str(path))
+    reopened = api.get_entity(saved["id"])
+    assert reopened["aliases"] == ["旧港"]
+    assert reopened["custom_fields"]["经济文化与特色"] == "旧版城市记录"
+    assert "遗迹特征" in {field["name"] for field in reopened["fields"]}
+    api.close_project()
 
 
 def test_bridge_creates_project_and_round_trips_entities(tmp_path):
@@ -70,7 +101,14 @@ def test_bridge_creates_project_and_round_trips_entities(tmp_path):
             "aliases": ["霜冠"],
             "tags": ["人物", "北境"],
             "custom_fields": {"中文名": "艾琳"},
-            "dates": [{"date_kind": "birth", "label": "诞生", "year": 125}],
+            "dates": [
+                {
+                    "date_kind": "birth",
+                    "label": "诞生",
+                    "description": "在海港灯塔下出生。",
+                    "year": 125,
+                }
+            ],
         }
     )
     saved_first = api.save_entity(first)
@@ -95,6 +133,8 @@ def test_bridge_creates_project_and_round_trips_entities(tmp_path):
     assert details["tags"] == ["人物", "北境"]
     assert details["custom_fields"]["中文名"] == "艾琳"
     assert details["dates"][0]["year"] == 125
+    assert details["dates"][0]["description"] == "在海港灯塔下出生。"
+    assert api.get_timeline(saved_first["id"])[0]["description"] == "在海港灯塔下出生。"
     assert details["relations"][0]["other_name"] == "雾松堡"
     assert details["backlinks"] == [
         {"id": saved_second["id"], "name": "雾松堡", "color": "#7c3aed"}
@@ -338,4 +378,24 @@ def test_bridge_permanently_deletes_graph_node_and_all_relationship_data(tmp_pat
         == 0
     )
     assert api.get_history(source["id"])[0]["change_type"] == "delete"
+    api.close_project()
+
+
+def test_bridge_persists_save_mode_per_project(tmp_path):
+    api = BridgeAPI()
+    path = tmp_path / "save-policy.aethercod"
+    state = api.create_project(str(path), "保存策略", "纪年")
+    assert state["save_mode"] == "realtime"
+    state = api.update_save_settings("interval", 12)
+    assert state["save_mode"] == "interval"
+    assert state["save_interval"] == 12
+    state = api.update_save_settings("manual", 0)
+    assert state["save_mode"] == "manual"
+    assert state["save_interval"] == 1
+    api.close_project()
+    reopened = api.open_project(str(path))
+    assert reopened["save_mode"] == "manual"
+    assert reopened["save_interval"] == 1
+    with pytest.raises(ValueError, match="Unsupported"):
+        api.update_save_settings("invalid", 5)
     api.close_project()
