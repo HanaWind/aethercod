@@ -42,8 +42,10 @@ export default function GraphView({
   selectedIds,
   onFilterChange,
   motionEnabled,
+  writable,
   onSelect,
   onDelete,
+  onError,
 }: {
   graph: GraphData;
   types: EntityType[];
@@ -51,8 +53,10 @@ export default function GraphView({
   selectedIds: string[];
   onFilterChange: (ids: string[]) => void;
   motionEnabled: boolean;
+  writable: boolean;
   onSelect: (entityId: string) => void;
   onDelete: (entityId: string, name: string) => void;
+  onError: (message: string) => void;
 }) {
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
@@ -71,8 +75,10 @@ export default function GraphView({
   } | null>(null);
   const suppressClick = useRef("");
   const clickTimer = useRef<number | undefined>(undefined);
+  const dragHoldTimer = useRef<number | undefined>(undefined);
   const displayedFocus = useRef<Record<string, Point>>({});
   const positionAnimation = useRef(0);
+  const canvas = useRef<SVGSVGElement>(null);
   const scene = useRef<SVGGElement>(null);
   const lineMaskId = useId();
   const baseNodes = useMemo(
@@ -124,10 +130,13 @@ export default function GraphView({
           .toLocaleLowerCase()
           .includes(filterQuery.trim().toLocaleLowerCase())),
   );
+  const visibleGraphRef = useRef(visibleGraph);
+  visibleGraphRef.current = visibleGraph;
 
   useEffect(
     () => () => {
       window.clearTimeout(clickTimer.current);
+      window.clearTimeout(dragHoldTimer.current);
       window.cancelAnimationFrame(positionAnimation.current);
     },
     [],
@@ -147,6 +156,19 @@ export default function GraphView({
     };
   }, [nodeMenu]);
 
+  useEffect(() => {
+    const svg = canvas.current;
+    if (!svg) return;
+    const zoomFromWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const factor = Math.exp(-event.deltaY * 0.0012);
+      setZoom((current) => Math.max(0.35, Math.min(2.2, current * factor)));
+    };
+    svg.addEventListener("wheel", zoomFromWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", zoomFromWheel);
+  }, []);
+
   const moveNode = (event: PointerEvent<SVGSVGElement>) => {
     const current = drag.current;
     const matrix = scene.current?.getScreenCTM();
@@ -160,6 +182,8 @@ export default function GraphView({
       current.moved = true;
       resetFocus();
     }
+    window.cancelAnimationFrame(positionAnimation.current);
+    window.clearTimeout(dragHoldTimer.current);
     const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(
       matrix.inverse(),
     );
@@ -170,11 +194,131 @@ export default function GraphView({
         y: Math.max(0.05, Math.min(0.9, point.y / HEIGHT)),
       },
     }));
+    dragHoldTimer.current = window.setTimeout(
+      () => resolveDragAvoidance(current.id),
+      500,
+    );
   };
 
   const finishDrag = () => {
+    window.clearTimeout(dragHoldTimer.current);
     if (drag.current?.moved) suppressClick.current = drag.current.id;
+    if (drag.current?.moved) resolveDragAvoidance(drag.current.id);
     drag.current = null;
+  };
+
+  const resolveDragAvoidance = (anchorId: string) => {
+    if (!writable) return;
+    const currentNodes = visibleGraphRef.current.nodes;
+    const points = new Map(
+      currentNodes.map((node) => [node.id, { x: node.x * WIDTH, y: node.y * HEIGHT }]),
+    );
+    const byId = new Map(currentNodes.map((node) => [node.id, node]));
+    const clamp = (node: GraphNode, point: Point) => ({
+      x: Math.max(nodeRadius(node.name) + 12, Math.min(WIDTH - nodeRadius(node.name) - 12, point.x)),
+      y: Math.max(48, Math.min(HEIGHT - 48, point.y)),
+    });
+
+    for (let pass = 0; pass < 8; pass += 1) {
+      let moved = false;
+      for (let leftIndex = 0; leftIndex < currentNodes.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < currentNodes.length; rightIndex += 1) {
+          const left = currentNodes[leftIndex];
+          const right = currentNodes[rightIndex];
+          const leftPoint = points.get(left.id)!;
+          const rightPoint = points.get(right.id)!;
+          const requiredX = nodeRadius(left.name) + nodeRadius(right.name) + 14;
+          const requiredY = 86;
+          let dx = rightPoint.x - leftPoint.x;
+          let dy = rightPoint.y - leftPoint.y;
+          let nx = dx / requiredX;
+          let ny = dy / requiredY;
+          let distance = Math.hypot(nx, ny);
+          if (distance >= 1) continue;
+          if (distance < 0.001) {
+            const seed = Number.parseInt(right.id.slice(0, 4), 16) || rightIndex;
+            const angle = seed * 2.399963;
+            nx = Math.cos(angle);
+            ny = Math.sin(angle);
+            distance = 0;
+          }
+          const push = 1 - distance + 0.06;
+          const target = right.id === anchorId ? left : right;
+          const direction = target.id === right.id ? 1 : -1;
+          const targetPoint = points.get(target.id)!;
+          const next = clamp(target, {
+            x: targetPoint.x + direction * nx * requiredX * push,
+            y: targetPoint.y + direction * ny * requiredY * push,
+          });
+          if (Math.hypot(next.x - targetPoint.x, next.y - targetPoint.y) > 0.5) {
+            points.set(target.id, next);
+            moved = true;
+          }
+        }
+      }
+      if (!moved) break;
+    }
+
+    const targets = Object.fromEntries(
+      [...points.entries()]
+        .filter(([id, point]) => {
+          const current = byId.get(id)!;
+          return (
+            id === anchorId ||
+            Math.hypot(
+              point.x / WIDTH - current.x,
+              point.y / HEIGHT - current.y,
+            ) > 0.0005
+          );
+        })
+        .map(([id, point]) => [id, { x: point.x / WIDTH, y: point.y / HEIGHT }]),
+    ) as Record<string, Point>;
+    const entries = Object.entries(targets);
+    if (!entries.length) return;
+    const from = Object.fromEntries(
+      entries.map(([id]) => {
+        const node = byId.get(id)!;
+        return [id, { x: node.x, y: node.y }];
+      }),
+    ) as Record<string, Point>;
+    const persist = () => {
+      setPositions((previous) => ({ ...previous, ...targets }));
+      void window.pywebview?.api
+        .save_graph_layout(targets)
+        .catch((reason: Error) => onError(reason.message));
+    };
+    window.cancelAnimationFrame(positionAnimation.current);
+    if (!motionEnabled) {
+      persist();
+      return;
+    }
+    const startedAt = performance.now();
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 280);
+      const eased = 1 - (1 - progress) ** 3;
+      setPositions((previous) => ({
+        ...previous,
+        ...Object.fromEntries(
+          entries.map(([id]) => {
+            const origin = from[id];
+            const target = targets[id];
+            return [
+              id,
+              {
+                x: origin.x + (target.x - origin.x) * eased,
+                y: origin.y + (target.y - origin.y) * eased,
+              },
+            ];
+          }),
+        ),
+      }));
+      if (progress === 1) {
+        persist();
+        return;
+      }
+      positionAnimation.current = window.requestAnimationFrame(animate);
+    };
+    positionAnimation.current = window.requestAnimationFrame(animate);
   };
 
   const focusNode = (node: GraphNode) => {
@@ -260,7 +404,7 @@ export default function GraphView({
   };
 
   const zoomBy = (amount: number) =>
-    setZoom((current) => Math.max(0.65, Math.min(1.6, current + amount)));
+    setZoom((current) => Math.max(0.35, Math.min(2.2, current + amount)));
 
   const fit = () => {
     setZoom(1);
@@ -387,6 +531,7 @@ export default function GraphView({
       {visibleGraph.nodes.length ? (
         <div className="graph-canvas-wrap">
           <svg
+            ref={canvas}
             className="graph-canvas"
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             role="group"
@@ -426,36 +571,50 @@ export default function GraphView({
                 </mask>
               </defs>
               <g mask={`url(#${lineMaskId})`}>
-                {visibleGraph.edges.map(({ edge, source, target }) => (
-                  <g key={edge.id} className="graph-edge">
-                    <line
-                      x1={source.x * WIDTH}
-                      y1={source.y * HEIGHT}
-                      x2={target.x * WIDTH}
-                      y2={target.y * HEIGHT}
-                    />
-                    <text
-                      x={((source.x + target.x) * WIDTH) / 2}
-                      y={((source.y + target.y) * HEIGHT) / 2 - 7}
+                <AnimatePresence initial={false}>
+                  {visibleGraph.edges.map(({ edge, source, target }) => (
+                    <motion.g
+                      key={edge.id}
+                      className="graph-edge"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.17 }}
                     >
-                      {edge.label}
-                    </text>
-                  </g>
-                ))}
+                      <line
+                        x1={source.x * WIDTH}
+                        y1={source.y * HEIGHT}
+                        x2={target.x * WIDTH}
+                        y2={target.y * HEIGHT}
+                      />
+                      <text
+                        x={((source.x + target.x) * WIDTH) / 2}
+                        y={((source.y + target.y) * HEIGHT) / 2 - 7}
+                      >
+                        {edge.label}
+                      </text>
+                    </motion.g>
+                  ))}
+                </AnimatePresence>
               </g>
-              {[...visibleGraph.nodes].sort((left, right) =>
-                Number(left.id === centeredNodeId) - Number(right.id === centeredNodeId),
-              ).map((node) => (
-                <g
+              <AnimatePresence initial={false}>
+                {[...visibleGraph.nodes].sort((left, right) =>
+                  Number(left.id === centeredNodeId) - Number(right.id === centeredNodeId),
+                ).map((node) => (
+                <motion.g
                   key={node.id}
                   className="graph-node"
                   role="button"
                   tabIndex={0}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.17 }}
                   aria-label={`${node.name}，单击居中，双击打开`}
                   aria-pressed={node.id === centeredNodeId}
                   transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}
                   onPointerDown={(event) => {
-                    if (event.button !== 0) return;
+                    if (event.button !== 0 || !writable) return;
                     drag.current = {
                       id: node.id,
                       x: event.clientX,
@@ -497,8 +656,9 @@ export default function GraphView({
                         "词条"}
                     </text>
                   </g>
-                </g>
+                </motion.g>
               ))}
+              </AnimatePresence>
             </motion.g>
           </svg>
         </div>

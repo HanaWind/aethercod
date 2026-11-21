@@ -159,6 +159,7 @@ class Entity:
     created_at: str = ""
     updated_at: str = ""
     deleted_at: str | None = None
+    is_favorite: bool = False
     aliases: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     custom_fields: dict[str, Any] = field(default_factory=dict)

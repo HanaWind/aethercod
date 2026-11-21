@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from aethercod.db import connect, schema_version
+from aethercod.db import BUILTIN_FIELDS, connect, schema_version
 from aethercod.models import is_valid_uuid, normalize_uuid
 
 
@@ -24,11 +24,73 @@ def test_uuid_policy_accepts_hyphens_and_normalizes():
         normalize_uuid("not-a-uuid")
 
 
-def test_new_database_seeds_v3_and_builtin_fields(project):
+def test_new_database_seeds_current_schema_and_builtin_fields(project):
     conn, service = project
-    assert schema_version(conn) == 3
+    assert schema_version(conn) == 5
     assert {item.id for item in service.taxonomy.list_types()} >= {"person", "polity", "place"}
     assert {field.name for field in service.fields.list("person")} >= {"中文名", "英文名", "称号"}
+
+
+def test_polity_and_place_templates_exclude_generic_fields():
+    polity_names = {field[0] for field in BUILTIN_FIELDS["polity"]}
+    place_names = {field[0] for field in BUILTIN_FIELDS["place"]}
+    assert not {"正式名称", "定位/身份", "核心特征"} & polity_names
+    assert not {"正式名称", "定位/身份", "核心特征", "地位", "面积"} & place_names
+    category = next(field for field in BUILTIN_FIELDS["place"] if field[0] == "地点类别")
+    assert category[2] is True
+
+
+def test_v3_database_migrates_favorite_and_graph_layout_without_losing_place_rows(tmp_path):
+    path = tmp_path / "v3-library.aethercod"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO schema_meta VALUES ('version', '3');
+        CREATE TABLE entity_types (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, icon TEXT NOT NULL, is_builtin INTEGER NOT NULL);
+        CREATE TABLE entities (
+            id TEXT PRIMARY KEY, type_id TEXT NOT NULL, name TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT '#7c3aed', remarks TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
+        CREATE TABLE entity_type_fields (
+            id TEXT PRIMARY KEY, type_id TEXT NOT NULL, name TEXT NOT NULL,
+            field_type TEXT NOT NULL, required INTEGER NOT NULL,
+            description TEXT NOT NULL DEFAULT '', options_json TEXT NOT NULL DEFAULT '[]', default_json TEXT);
+        CREATE TABLE entity_field_values (
+            entity_id TEXT NOT NULL, field_id TEXT NOT NULL, value_json TEXT NOT NULL,
+            PRIMARY KEY(entity_id,field_id));
+        INSERT INTO entity_types VALUES ('place', '地区/地点', '⌂', 1);
+        INSERT INTO entities VALUES (
+            '123e4567e89b12d3a456426614174000', 'place', '旧地区', '', '',
+            '#7c3aed', '', '2024', '2024', NULL);
+        INSERT INTO entity_type_fields VALUES (
+            '123e4567e89b12d3a456426614174001', 'place', '地点类别', 'choice', 0, '', '[]', NULL);
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    migrated = connect(path)
+    try:
+        assert schema_version(migrated) == 5
+        assert migrated.execute(
+            "SELECT is_favorite FROM entities WHERE id='123e4567e89b12d3a456426614174000'"
+        ).fetchone()[0] == 0
+        assert migrated.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='entity_graph_positions'"
+        ).fetchone()
+        category = migrated.execute(
+            "SELECT value_json FROM entity_field_values WHERE entity_id=?",
+            ('123e4567e89b12d3a456426614174000',),
+        ).fetchone()
+        assert category[0] == '"其他"'
+        assert migrated.execute(
+            "SELECT required FROM entity_type_fields WHERE type_id='place' AND name='地点类别'"
+        ).fetchone()[0] == 1
+    finally:
+        migrated.close()
 
 
 def test_custom_field_crud_and_typed_validation(project):
@@ -93,7 +155,7 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
     conn.close()
     upgraded = connect(path)
     try:
-        assert schema_version(upgraded) == 3
+        assert schema_version(upgraded) == 5
         assert upgraded.execute("SELECT name FROM entities").fetchone()[0] == "旧人物"
         assert upgraded.execute("SELECT 1 FROM alias_redirects").fetchone() is None
     finally:
@@ -120,7 +182,7 @@ def test_v2_date_migration_adds_description_without_changing_existing_dates(tmp_
 
     upgraded = connect(path)
     try:
-        assert schema_version(upgraded) == 3
+        assert schema_version(upgraded) == 5
         row = upgraded.execute("SELECT label,year,description FROM entity_dates").fetchone()
         assert tuple(row) == ("旧事件", 42, "")
     finally:

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import webbrowser
 
 from ..db import connect, is_builtin_field
+from ..exchange import export_library, import_library, read_json, write_json
 from ..history import EntityHistory
 from ..models import Entity, utc_now
 from ..repositories import atomic, normalize
@@ -20,12 +21,25 @@ from ..services import ProjectService
 
 _T = TypeVar("_T")
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+_RETIRED_TEMPLATE_FIELDS = {
+    "polity": {"正式名称", "定位/身份", "核心特征"},
+    "place": {
+        "正式名称",
+        "定位/身份",
+        "核心特征",
+        "地位",
+        "面积",
+        "地理概述",
+        "经济文化与特色",
+    },
+}
 
 _ENTITY_CHANGE_LABELS = {
     "name": "名称",
     "summary": "摘要",
     "notes": "正文",
     "color": "主题色",
+    "is_favorite": "收藏状态",
     "remarks": "备注",
     "aliases": "别名",
     "tags": "分类",
@@ -118,6 +132,19 @@ class BridgeAPI:
         )
         return str(selected[0]) if selected else ""
 
+    def _choose_json_path(self, *, save: bool = False) -> str:
+        if self._window is None:
+            return ""
+        import webview
+
+        selected = self._window.create_file_dialog(
+            webview.FileDialog.SAVE if save else webview.FileDialog.OPEN,
+            directory=str(Path.home()),
+            save_filename="aethercod-export.json" if save else "",
+            file_types=("JSON 文件 (*.json)",),
+        )
+        return str(selected[0]) if selected else ""
+
     @staticmethod
     def _project_meta(conn: sqlite3.Connection) -> dict[str, str]:
         return {row[0]: row[1] for row in conn.execute("SELECT key,value FROM project_meta")}
@@ -132,12 +159,17 @@ class BridgeAPI:
             return set()
         try:
             values = json.loads(row[0])
-        except TypeError, json.JSONDecodeError:
+        except (TypeError, json.JSONDecodeError):
             return set()
         return {str(value) for value in values} if isinstance(values, list) else set()
 
     def _type_dict(self, entity_type: Any) -> dict[str, Any]:
         return {**asdict(entity_type), "hidden": entity_type.id in self._hidden_type_ids()}
+
+    def _fields_for_ui(self, type_id: str) -> list[Any]:
+        service = self._require_service()
+        retired = _RETIRED_TEMPLATE_FIELDS.get(type_id, set())
+        return [field for field in service.fields.list(type_id) if field.name not in retired]
 
     def _replace_project(self, conn: sqlite3.Connection, path: str) -> None:
         old_conn = self._conn
@@ -256,6 +288,7 @@ class BridgeAPI:
                     "name": entity.name,
                     "summary": entity.summary,
                     "color": entity.color,
+                    "is_favorite": entity.is_favorite,
                 }
                 for entity in entities
             ],
@@ -397,6 +430,7 @@ class BridgeAPI:
                 "name": entity.name,
                 "summary": entity.summary,
                 "color": entity.color,
+                "is_favorite": entity.is_favorite,
             }
             for entity in entities
         ]
@@ -410,7 +444,7 @@ class BridgeAPI:
         data = self._entity_dict(entity)
         entity_type = service.taxonomy.get(entity.type_id)
         data["type"] = asdict(entity_type) if entity_type else None
-        data["fields"] = [asdict(item) for item in service.fields.list(entity.type_id)]
+        data["fields"] = [asdict(item) for item in self._fields_for_ui(entity.type_id)]
         data["relations"] = service.relation_rows(entity.id)
         data["backlinks"] = self._backlinks(entity.id)
         return data
@@ -439,6 +473,7 @@ class BridgeAPI:
             "name": entity.name,
             "summary": entity.summary,
             "color": entity.color,
+            "is_favorite": entity.is_favorite,
         }
 
     def _backlinks(self, entity_id: str) -> list[dict[str, str]]:
@@ -461,12 +496,14 @@ class BridgeAPI:
     def create_entity(self, type_id: str) -> dict[str, Any]:
         service = self._ensure_writable()
         entity = service.new_entity(str(type_id))
-        definitions = service.fields.list(entity.type_id)
+        definitions = self._fields_for_ui(entity.type_id)
         entity.custom_fields = {
             field.name: field.default_value
             for field in definitions
             if field.default_value is not None
         }
+        if entity.type_id == "place":
+            entity.custom_fields.setdefault("地点类别", "其他")
         return {
             **self._entity_dict(entity),
             "type": asdict(service.taxonomy.get(entity.type_id)),
@@ -616,7 +653,7 @@ class BridgeAPI:
     def list_fields(self, type_id: str) -> list[dict[str, Any]]:
         return [
             {**asdict(item), "protected": is_builtin_field(item.id, item.type_id, item.name)}
-            for item in self._require_service().fields.list(str(type_id))
+            for item in self._fields_for_ui(str(type_id))
         ]
 
     @_serialized
@@ -785,6 +822,12 @@ class BridgeAPI:
         service = self._require_service()
         assert self._conn is not None
         hidden_types = self._hidden_type_ids()
+        saved_positions = {
+            row["entity_id"]: (float(row["x"]), float(row["y"]))
+            for row in self._conn.execute(
+                "SELECT entity_id,x,y FROM entity_graph_positions"
+            )
+        }
         entities = [
             entity for entity in service.entities.list() if entity.type_id not in hidden_types
         ]
@@ -800,8 +843,15 @@ class BridgeAPI:
                     "type_id": entity.type_id,
                     "color": entity.color,
                     "summary": entity.summary,
-                    "x": 0.5 + radius * math.cos(angle),
-                    "y": 0.5 + radius * math.sin(angle),
+                    "is_favorite": entity.is_favorite,
+                    "x": saved_positions.get(
+                        entity.id,
+                        (0.5 + radius * math.cos(angle), 0.5 + radius * math.sin(angle)),
+                    )[0],
+                    "y": saved_positions.get(
+                        entity.id,
+                        (0.5 + radius * math.cos(angle), 0.5 + radius * math.sin(angle)),
+                    )[1],
                 }
             )
         node_ids = {node["id"] for node in nodes}
@@ -813,6 +863,49 @@ class BridgeAPI:
             if row["source_id"] in node_ids and row["target_id"] in node_ids
         ]
         return {"nodes": nodes, "edges": edges}
+
+    @_serialized
+    def save_graph_layout(self, positions: dict[str, dict[str, float]]) -> bool:
+        self._ensure_writable()
+        assert self._conn is not None
+        with self._conn:
+            for entity_id, point in positions.items():
+                row = self._conn.execute(
+                    "SELECT 1 FROM entities WHERE id=? AND deleted_at IS NULL", (entity_id,)
+                ).fetchone()
+                if row is None:
+                    continue
+                x = max(0.04, min(0.96, float(point["x"])))
+                y = max(0.06, min(0.9, float(point["y"])))
+                self._conn.execute(
+                    "INSERT INTO entity_graph_positions(entity_id,x,y) VALUES(?,?,?) "
+                    "ON CONFLICT(entity_id) DO UPDATE SET x=excluded.x,y=excluded.y",
+                    (entity_id, x, y),
+                )
+        return True
+
+    @_serialized
+    def export_json(self) -> bool:
+        self._require_service()
+        assert self._conn is not None
+        path = self._choose_json_path(save=True)
+        if not path:
+            return False
+        destination = Path(path)
+        if destination.suffix.lower() != ".json":
+            destination = destination.with_suffix(".json")
+        write_json(export_library(self._conn), destination)
+        return True
+
+    @_serialized
+    def import_json(self) -> dict[str, Any]:
+        self._ensure_writable()
+        assert self._conn is not None
+        path = self._choose_json_path()
+        if not path:
+            return self.get_state()
+        import_library(self._conn, read_json(path))
+        return self.get_state()
 
     @_serialized
     def get_history(self, entity_id: str) -> list[dict[str, Any]]:

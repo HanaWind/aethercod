@@ -530,9 +530,11 @@ class EntityRepository:
                     "created_at",
                     "updated_at",
                     "deleted_at",
+                    "is_favorite",
                 )
             }
         )
+        e.is_favorite = bool(e.is_favorite)
         e.aliases = [
             r[0]
             for r in self.conn.execute(
@@ -553,7 +555,7 @@ class EntityRepository:
         ):
             try:
                 e.custom_fields[r[0]] = json.loads(r[1])
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 e.custom_fields[r[0]] = r[1]
         e.dates = [
             dict(r)
@@ -621,10 +623,11 @@ class EntityRepository:
         entity.created_at = entity.created_at or now
         with atomic(self.conn) if commit else nullcontext():
             self.conn.execute(
-                """INSERT INTO entities(id,type_id,name,summary,notes,color,remarks,created_at,updated_at,deleted_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                """INSERT INTO entities(id,type_id,name,summary,notes,color,remarks,created_at,updated_at,deleted_at,is_favorite)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                    type_id=excluded.type_id,name=excluded.name,summary=excluded.summary,notes=excluded.notes,
-                   color=excluded.color,remarks=excluded.remarks,updated_at=excluded.updated_at,deleted_at=excluded.deleted_at""",
+                   color=excluded.color,remarks=excluded.remarks,updated_at=excluded.updated_at,deleted_at=excluded.deleted_at,
+                   is_favorite=excluded.is_favorite""",
                 (
                     entity.id,
                     entity.type_id,
@@ -636,6 +639,7 @@ class EntityRepository:
                     entity.created_at,
                     entity.updated_at,
                     entity.deleted_at,
+                    int(entity.is_favorite),
                 ),
             )
             self.fields.validate_values(entity.type_id, entity.custom_fields, allow_unknown=True)

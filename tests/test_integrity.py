@@ -139,7 +139,7 @@ def test_migration_failure_rolls_back_ddl_and_data(tmp_path, monkeypatch):
     assert list(conn.iterdump()) == before
     monkeypatch.setattr(db, "migrate_v1_to_v2", original)
     initialize(conn)
-    assert schema_version(conn) == 3
+    assert schema_version(conn) == 5
     assert {"precision", "description"} <= {
         row[1] for row in conn.execute("PRAGMA table_info(entity_dates)")
     }
@@ -304,6 +304,7 @@ def test_default_v2_round_trip_preserves_references_metadata_and_timestamps(proj
     conn, service = project
     kind = service.taxonomy.create_type("Custom", "C")
     first = service.save_entity(Entity(new_uuid(), kind.id, "A"))
+    first.is_favorite = True
     second = service.save_entity(Entity(new_uuid(), kind.id, "B"))
     service.fields.create(
         kind.id, "Peer", "entity_ref", description="Reference", default_value=second.id
@@ -327,7 +328,7 @@ def test_default_v2_round_trip_preserves_references_metadata_and_timestamps(proj
     conn.commit()
     payload = export_library(conn)
     assert payload["format_version"] == 2
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 5
     assert export_library(conn, format_version=1)["format_version"] == 1
     assert payload["entities"][0]["dates"][0]["precision"] == "year"
     assert payload["entities"][0]["dates"][0]["description"] == "月色下的誓约"
@@ -336,6 +337,7 @@ def test_default_v2_round_trip_preserves_references_metadata_and_timestamps(proj
         import_library(target, payload)
         assert not target.in_transaction
         assert export_library(target) == payload
+        assert ProjectService(target).entities.get(first.id).is_favorite is True
         import_library(target, payload)
         assert export_library(target) == payload
     finally:

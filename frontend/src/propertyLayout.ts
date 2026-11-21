@@ -15,8 +15,15 @@ const placeFields = new Map([
 ]);
 const placeTemplate = new Set([...placeBaseFields, ...Array.from(placeFields.values()).flat()]);
 const polityTemplate = new Set(polityFields);
-const legacyFields = new Set(["正式名称", "定位/身份", "核心特征"]);
-const legacyPlaceFields = new Set(["地位", "面积", "地理概述", "经济文化与特色"]);
+const legacyFields = new Set([
+  "正式名称",
+  "定位/身份",
+  "核心特征",
+  "地位",
+  "面积",
+  "地理概述",
+  "经济文化与特色",
+]);
 
 export function propertyLayout(entity: Entity) {
   const fields = entity.fields ?? [];
@@ -37,10 +44,7 @@ export function propertyLayout(entity: Entity) {
     }),
     additional: fields.filter((field) => {
       if (template.has(field.name)) return false;
-      if (!legacyFields.has(field.name) && !(isPlace && legacyPlaceFields.has(field.name)))
-        return true;
-      const value = entity.custom_fields[field.name];
-      return value !== undefined && value !== null && value !== "";
+      return !legacyFields.has(field.name);
     }),
   };
 }

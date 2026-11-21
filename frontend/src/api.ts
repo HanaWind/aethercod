@@ -24,6 +24,7 @@ export type EntitySummary = {
   name: string;
   summary: string;
   color: string;
+  is_favorite?: boolean;
 };
 
 export type EntityDate = {
@@ -178,6 +179,11 @@ export type BridgeApi = {
   get_history(entity_id: string): Promise<HistoryEntry[]>;
   restore_entity_version(entity_id: string, version: number): Promise<Entity>;
   get_graph(): Promise<GraphData>;
+  save_graph_layout(
+    positions: Record<string, { x: number; y: number }>,
+  ): Promise<boolean>;
+  export_json(): Promise<boolean>;
+  import_json(): Promise<ProjectState>;
   open_external_url(url: string): Promise<boolean>;
   window_maximized(): Promise<boolean>;
   window_action(

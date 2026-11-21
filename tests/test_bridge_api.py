@@ -15,6 +15,45 @@ def test_bridge_empty_state_includes_save_defaults():
     assert state["save_interval"] == 1
 
 
+def test_bridge_saves_favorites_and_graph_positions(tmp_path):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "favorite-layout.aethercod"), "星录", "泰拉纪元")
+    entity = api.create_entity("person")
+    entity.update({"name": "艾琳", "is_favorite": True})
+    saved = api.save_entity(entity)
+    assert saved["is_favorite"] is True
+    assert next(
+        item for item in api.get_state()["entities"] if item["id"] == saved["id"]
+    )["is_favorite"] is True
+
+    position = {saved["id"]: {"x": 0.23, "y": 0.71}}
+    assert api.save_graph_layout(position)
+    node = next(item for item in api.get_graph()["nodes"] if item["id"] == saved["id"])
+    assert node["x"] == pytest.approx(0.23)
+    assert node["y"] == pytest.approx(0.71)
+
+
+def test_retired_polity_fields_stay_stored_but_are_hidden_from_editor(tmp_path):
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "polity-fields.aethercod"), "政权", "泰拉纪元")
+    api.save_field({"type_id": "polity", "name": "正式名称"})
+    api.save_field({"type_id": "polity", "name": "附属王朝"})
+    polity = api.create_entity("polity")
+    polity.update(
+        {
+            "name": "晨曦王国",
+            "custom_fields": {"正式名称": "晨曦王国全称", "附属王朝": "第二王朝"},
+        }
+    )
+    saved = api.save_entity(polity)
+
+    fields = {field["name"] for field in api.list_fields("polity")}
+    assert "正式名称" not in fields
+    assert "附属王朝" in fields
+    assert {field["name"] for field in saved["fields"]} == fields
+    assert saved["custom_fields"]["正式名称"] == "晨曦王国全称"
+
+
 def test_bridge_window_control_toggles_maximize():
     class EventHook:
         def __init__(self):

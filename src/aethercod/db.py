@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 BUILTIN_TYPES = [
     ("person", "人物", "♙"),
     ("polity", "国家/政权", "♜"),
@@ -28,7 +28,6 @@ BUILTIN_FIELDS = {
         ("种族", "text", False, []),
     ],
     "polity": [
-        ("正式名称", "text", False, []),
         ("英文名", "text", False, []),
         (
             "制度",
@@ -42,19 +41,14 @@ BUILTIN_FIELDS = {
         ("地理概述", "textarea", False, []),
     ],
     "place": [
-        ("正式名称", "text", False, []),
         ("英文名", "text", False, []),
         (
             "地点类别",
             "choice",
-            False,
+            True,
             list(PLACE_CATEGORIES),
         ),
-        ("地位", "text", False, []),
-        ("面积", "text", False, []),
         ("人口", "integer", False, []),
-        ("地理概述", "textarea", False, []),
-        ("经济文化与特色", "textarea", False, []),
         ("经济", "textarea", False, []),
         ("地区特色", "textarea", False, []),
         ("所属时代/文明", "text", False, []),
@@ -91,14 +85,15 @@ BUILTIN_FIELDS = {
     ],
 }
 
-# These fields are intentionally shared by every built-in type.  They keep the
-# editor useful for hybrid entries and user-defined roles without forcing all
-# semantics into a type-specific template.
+# These fields support hybrid entries on built-in types whose templates benefit
+# from shared role and characteristic fields.
 COMMON_FIELDS = [
     ("定位/身份", "text", False, []),
     ("核心特征", "textarea", False, []),
 ]
 for _type_id in tuple(BUILTIN_FIELDS):
+    if _type_id in {"polity", "place"}:
+        continue
     _existing_names = {item[0] for item in BUILTIN_FIELDS[_type_id]}
     BUILTIN_FIELDS[_type_id].extend(
         item for item in COMMON_FIELDS if item[0] not in _existing_names
@@ -113,7 +108,8 @@ CREATE TABLE IF NOT EXISTS entity_types (
 CREATE TABLE IF NOT EXISTS entities (
   id TEXT PRIMARY KEY, type_id TEXT NOT NULL REFERENCES entity_types(id), name TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '#7c3aed',
-  remarks TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+  remarks TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,
+  is_favorite INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS entity_aliases (
   entity_id TEXT NOT NULL REFERENCES entities(id), alias TEXT NOT NULL, normalized TEXT NOT NULL,
@@ -148,6 +144,10 @@ CREATE TABLE IF NOT EXISTS entity_history (
   snapshot TEXT NOT NULL, changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL,
   change_type TEXT NOT NULL, change_description TEXT NOT NULL DEFAULT '',
   UNIQUE(entity_id, version)
+);
+CREATE TABLE IF NOT EXISTS entity_graph_positions (
+  entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+  x REAL NOT NULL, y REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type_id);
@@ -207,6 +207,34 @@ def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     _add_column(conn, "entity_dates", "description TEXT NOT NULL DEFAULT ''")
 
 
+def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Add favorites and tighten the built-in place type's required category."""
+    _add_column(conn, "entities", "is_favorite INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        "UPDATE entity_type_fields SET required=1, options_json=? "
+        "WHERE type_id='place' AND name='地点类别'",
+        (json.dumps(PLACE_CATEGORIES, ensure_ascii=False),),
+    )
+    category = conn.execute(
+        "SELECT id FROM entity_type_fields WHERE type_id='place' AND name='地点类别'"
+    ).fetchone()
+    if category:
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_field_values(entity_id,field_id,value_json) "
+            "SELECT id,?,? FROM entities WHERE type_id='place'",
+            (category[0], json.dumps("其他", ensure_ascii=False)),
+        )
+
+
+def migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Store graph node coordinates in the library."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS entity_graph_positions ("
+        "entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE, "
+        "x REAL NOT NULL, y REAL NOT NULL)"
+    )
+
+
 def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
@@ -246,6 +274,10 @@ def initialize(conn: sqlite3.Connection) -> None:
             migrate_v1_to_v2(conn)
         if version < 3:
             migrate_v2_to_v3(conn)
+        if version < 4:
+            migrate_v3_to_v4(conn)
+        if version < 5:
+            migrate_v4_to_v5(conn)
         conn.execute(
             "INSERT INTO schema_meta(key,value) VALUES('version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),

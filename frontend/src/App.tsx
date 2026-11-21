@@ -25,6 +25,7 @@ import {
   Plus,
   Search,
   Save,
+  Star,
   Settings2,
   Sparkles,
   Square,
@@ -59,6 +60,7 @@ import TimelineView from "./TimelineView";
 import ElasticScroll from "./ElasticScroll";
 import { propertyLayout } from "./propertyLayout";
 import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
+import brandMark from "../../src/aethercod/resources/aethercod-mark.svg";
 
 const TYPE_ICONS: Record<string, typeof UserRound> = {
   person: UserRound,
@@ -137,7 +139,7 @@ function Workspace({
     save_interval: 1,
   });
   const [activeView, setActiveView] = useState<
-    "entries" | "timeline" | "graph" | "settings"
+    "entries" | "timeline" | "graph" | "favorites" | "settings"
   >("entries");
   const [settingsTab, setSettingsTab] = useState<"library" | "types">(
     "library",
@@ -154,6 +156,12 @@ function Workspace({
   const [dirty, setDirty] = useState(false);
   const [windowMaximized, setWindowMaximized] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [statusToast, setStatusToast] = useState<{
+    message: string;
+    kind: "success" | "error";
+    key: number;
+  } | null>(null);
+  const [intervalSaveCycle, setIntervalSaveCycle] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [compactWindow, setCompactWindow] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
@@ -198,6 +206,8 @@ function Workspace({
   const [newDate, setNewDate] = useState({
     label: "",
     year: "",
+    date_value: null as string | null,
+    precision: "year",
     description: "",
   });
   const [revision, setRevision] = useState(0);
@@ -210,10 +220,16 @@ function Workspace({
     new Map<string, { promise: Promise<void>; version: number }>(),
   );
   const paletteInput = useRef<HTMLInputElement>(null);
+  const statusToastTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     localStorage.setItem("aethercod-theme", theme);
   }, [theme]);
+
+  useEffect(
+    () => () => window.clearTimeout(statusToastTimer.current),
+    [],
+  );
 
   const refreshWindowState = useCallback(async () => {
     const api = desktopApi();
@@ -394,8 +410,28 @@ function Workspace({
     return true;
   }, [selectedId]);
 
+  const showStatusToast = useCallback(
+    (message: string, kind: "success" | "error") => {
+      window.clearTimeout(statusToastTimer.current);
+      setStatusToast({ message, kind, key: Date.now() });
+      statusToastTimer.current = window.setTimeout(() => setStatusToast(null), 3000);
+    },
+    [],
+  );
+
+  const manualSave = useCallback(async () => {
+    if (!state.project || !state.writable) return;
+    if (await flushDraft()) {
+      setIntervalSaveCycle((cycle) => cycle + 1);
+      showStatusToast("已保存至本地资料库", "success");
+    }
+  }, [flushDraft, showStatusToast, state.project, state.writable]);
+
+  const showIssueToast = (message: string) =>
+    showStatusToast(message, "error");
+
   const navigateTo = async (
-    view: "entries" | "timeline" | "graph" | "settings",
+    view: "entries" | "timeline" | "graph" | "favorites" | "settings",
   ) => {
     setContextMenu(null);
     setActiveView(view);
@@ -446,6 +482,34 @@ function Workspace({
     if (!(await flushDraft())) return;
     setGraphFilterIds([draft.id]);
     await navigateTo("graph");
+  };
+
+  const toggleFavorite = () => {
+    if (!draft || !state.writable) return;
+    updateDraft((current) => ({ ...current, is_favorite: !current.is_favorite }));
+  };
+
+  const exportJson = async () => {
+    try {
+      await desktopApi()?.export_json();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const importJson = async () => {
+    const api = desktopApi();
+    if (!api || !state.writable || !(await flushDraft())) return;
+    try {
+      const next = await api.import_json();
+      syncState(next);
+      setGraph(await api.get_graph());
+      setGlobalTimeline(await api.get_timeline());
+      if (selectedId && next.entities.some((entity) => entity.id === selectedId))
+        await loadEntity(selectedId, false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   };
 
   const openContextMenu = (
@@ -582,13 +646,22 @@ function Workspace({
   }, [activeView, state.entities, loadEntity, selectedId]);
 
   useEffect(() => {
-    if (!dirty || !state.writable || state.save_mode !== "interval") return;
+    if (!state.project || !state.writable || state.save_mode !== "interval") return;
     const timer = window.setInterval(
-      () => void flushDraft(),
+      () => {
+        if (pendingDrafts.current.size) void flushDraft();
+      },
       Math.max(1, state.save_interval) * 60_000,
     );
     return () => window.clearInterval(timer);
-  }, [dirty, flushDraft, state.save_interval, state.save_mode, state.writable]);
+  }, [
+    flushDraft,
+    intervalSaveCycle,
+    state.project,
+    state.save_interval,
+    state.save_mode,
+    state.writable,
+  ]);
 
   useEffect(() => {
     if (!dirty || !state.writable || state.save_mode !== "realtime") return;
@@ -606,7 +679,11 @@ function Workspace({
         setPaletteNoMatch(false);
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void flushDraft();
+        void manualSave();
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+        if (activeView !== "entries" || !draft) return;
+        event.preventDefault();
+        toggleFavorite();
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
         setCreateOpen(false);
@@ -616,7 +693,7 @@ function Workspace({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [flushDraft]);
+  }, [activeView, draft, manualSave, toggleFavorite]);
 
   useEffect(() => {
     if (paletteOpen) window.setTimeout(() => paletteInput.current?.focus(), 40);
@@ -809,10 +886,11 @@ function Workspace({
       label: newDate.label.trim() || "历史节点",
       description: newDate.description.trim(),
       year,
-      precision: "year",
+      date_value: newDate.date_value,
+      precision: newDate.precision,
     };
     updateDraft((current) => ({ ...current, dates: [...current.dates, date] }));
-    setNewDate({ label: "", year: "", description: "" });
+    setNewDate({ label: "", year: "", date_value: null, precision: "year", description: "" });
   };
 
   const addRelation = async (event: React.FormEvent) => {
@@ -946,6 +1024,7 @@ function Workspace({
       value={draft?.custom_fields[field.name]}
       disabled={!state.writable}
       entities={state.entities}
+      onIssue={showIssueToast}
       allowEmpty={draft?.type_id !== "place" || field.name !== "地点类别"}
       onChange={(value) =>
         updateDraft((current) => ({
@@ -968,7 +1047,7 @@ function Workspace({
       <header className="titlebar pywebview-drag-region">
         <div className="brand-lockup pywebview-drag-region">
           <div className="brand-mark">
-            <Sparkles size={17} />
+            <img src={brandMark} alt="" aria-hidden="true" />
           </div>
           <span>AETHERCOD</span>
           {state.project && (
@@ -990,7 +1069,7 @@ function Workspace({
               className="topbar-save"
               disabled={!dirty || saving}
               title="保存所有未保存修改（Ctrl+S）"
-              onClick={() => void flushDraft()}
+              onClick={() => void manualSave()}
             >
               <Save size={13} />
               保存
@@ -1154,6 +1233,18 @@ function Workspace({
                   >
                     <Network size={15} />
                     <span className="sidebar-action-label">关系图谱</span>
+                  </button>
+                  <button
+                    className={activeView === "favorites" ? "active" : ""}
+                    aria-disabled={!state.project}
+                    onClick={() =>
+                      state.project
+                        ? void navigateTo("favorites")
+                        : promptForProject()
+                    }
+                  >
+                    <Star size={15} />
+                    <span className="sidebar-action-label">收藏夹</span>
                   </button>
                 </nav>
               </div>
@@ -1369,6 +1460,8 @@ function Workspace({
                   ? "时间线"
                   : activeView === "graph"
                     ? "关系图谱"
+                    : activeView === "favorites"
+                      ? "收藏夹"
                     : activeView === "settings"
                       ? "资料库设置"
                       : (draft?.type?.name ?? "典籍")}
@@ -1401,6 +1494,20 @@ function Workspace({
                 >
                   <CalendarDays size={15} />
                 </button>
+              )}
+              {activeView === "entries" && draft && (
+                <motion.button
+                  className={`favorite-toggle ${draft.is_favorite ? "active" : ""}`}
+                  title={draft.is_favorite ? "取消收藏（Ctrl+D）" : "加入收藏（Ctrl+D）"}
+                  aria-label={draft.is_favorite ? "取消收藏" : "加入收藏"}
+                  aria-pressed={Boolean(draft.is_favorite)}
+                  disabled={!state.writable}
+                  whileHover={motionEnabled ? { scale: 1.08 } : undefined}
+                  whileTap={motionEnabled ? { scale: 0.9 } : undefined}
+                  onClick={toggleFavorite}
+                >
+                  <Star size={16} fill={draft.is_favorite ? "currentColor" : "none"} />
+                </motion.button>
               )}
               {activeView === "entries" && draft && (
                 <button
@@ -1467,9 +1574,49 @@ function Workspace({
               selectedIds={graphFilterIds}
               onFilterChange={setGraphFilterIds}
               motionEnabled={motionEnabled}
+              writable={state.writable}
               onSelect={selectById}
               onDelete={(id, name) => void deleteGraphNode(id, name)}
+              onError={reportError}
             />
+          ) : activeView === "favorites" && state.project ? (
+            <ElasticScroll className="favorites-page-scroll">
+              <section className="favorites-page">
+                <header className="view-header">
+                  <div>
+                    <span className="section-kicker">已收藏的设定</span>
+                    <h1>收藏夹</h1>
+                  </div>
+                  <span className="heading-count">
+                    {state.entities.filter((entity) => entity.is_favorite).length}
+                  </span>
+                </header>
+                <div className="favorites-list">
+                  {state.entities.filter((entity) => entity.is_favorite).map((entity) => (
+                    <button
+                      className="favorite-row"
+                      key={entity.id}
+                      onClick={() => void selectEntity(entity)}
+                    >
+                      <span className="entity-dot" style={{ background: entity.color }} />
+                      <span className="favorite-row-copy">
+                        <strong>{entity.name}</strong>
+                        <small>{entity.summary || typeById(entity.type_id)?.name}</small>
+                      </span>
+                      <Star size={15} fill="currentColor" />
+                      <ChevronRight size={14} />
+                    </button>
+                  ))}
+                  {!state.entities.some((entity) => entity.is_favorite) && (
+                    <div className="empty-view">
+                      <Star size={22} />
+                      <strong>收藏夹为空</strong>
+                      <span>在词条详情页点亮星标后，词条会列在这里。</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+            </ElasticScroll>
           ) : !state.project ? (
             <section className="welcome-state">
               <div className="welcome-glyph">
@@ -1868,29 +2015,18 @@ function Workspace({
                                     }))
                                   }
                                 />
-                                <input
-                                  aria-label="事件年份"
-                                  className="year-input"
-                                  inputMode="numeric"
-                                  value={date.year ?? date.date_value ?? ""}
-                                  placeholder="年份"
+                                <DatePrecisionEditor
+                                  value={date}
                                   disabled={!state.writable}
-                                  onChange={(event) => {
-                                    const raw = event.target.value;
+                                  onIssue={showIssueToast}
+                                  onChange={(value) =>
                                     updateDraft((current) => ({
                                       ...current,
                                       dates: current.dates.map((item, itemIndex) =>
-                                        itemIndex === index
-                                          ? {
-                                              ...item,
-                                              year: raw === "" ? null : Number(raw),
-                                              date_value: null,
-                                              precision: "year",
-                                            }
-                                          : item,
+                                        itemIndex === index ? { ...item, ...value } : item,
                                       ),
-                                    }));
-                                  }}
+                                    }))
+                                  }
                                 />
                                 {state.writable && (
                                   <button
@@ -1945,17 +2081,22 @@ function Workspace({
                               }
                               placeholder="节点名称"
                             />
-                            <input
-                              className="year-input"
-                              inputMode="numeric"
-                              value={newDate.year}
-                              onChange={(event) =>
-                                setNewDate((value) => ({
-                                  ...value,
-                                  year: event.target.value,
+                            <DatePrecisionEditor
+                              value={{
+                                year: newDate.year ? Number(newDate.year) : null,
+                                date_value: newDate.date_value,
+                                precision: newDate.precision,
+                              }}
+                              disabled={!state.writable}
+                              onIssue={showIssueToast}
+                              onChange={(value) =>
+                                setNewDate((current) => ({
+                                  ...current,
+                                  year: value.year == null ? "" : String(value.year),
+                                  date_value: value.date_value ?? null,
+                                  precision: value.precision ?? "year",
                                 }))
                               }
-                              placeholder="年份"
                             />
                             <textarea
                               className="new-date-description"
@@ -2192,6 +2333,18 @@ function Workspace({
                     <Settings2 size={14} />
                     资料库设置
                   </button>
+                )}
+                {state.project && (
+                  <>
+                    <button onClick={() => void exportJson()}>
+                      <Save size={14} />
+                      导出为 JSON
+                    </button>
+                    <button disabled={!state.writable} onClick={() => void importJson()}>
+                      <FolderOpen size={14} />
+                      导入 JSON
+                    </button>
+                  </>
                 )}
               </>
             ) : contextMenu.kind === "type" ? (
@@ -2539,6 +2692,38 @@ function Workspace({
           </motion.div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {statusToast && (
+          <motion.div
+            key={statusToast.key}
+            className={`status-toast glass-menu ${statusToast.kind}`}
+            role="status"
+            initial={{ opacity: 0, y: -8, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -5, scale: 0.98 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              {statusToast.kind === "success" ? (
+                <motion.path
+                  d="m5 12.5 4.5 4.5L19 7"
+                  initial={{ pathLength: 0 }}
+                  animate={{ pathLength: 1 }}
+                  transition={{ duration: 0.34, ease: "easeOut" }}
+                />
+              ) : (
+                <motion.path
+                  d="m7 7 10 10M17 7 7 17"
+                  initial={{ pathLength: 0 }}
+                  animate={{ pathLength: 1 }}
+                  transition={{ duration: 0.24, ease: "easeOut" }}
+                />
+              )}
+            </svg>
+            <span>{statusToast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -2569,11 +2754,191 @@ function AliasInput({
   );
 }
 
+type DateParts = {
+  year?: number | null;
+  date_value?: string | null;
+  precision?: string;
+};
+
+function readDateParts(value: DateParts | string | null | undefined): DateParts {
+  const stored = typeof value === "string" ? value : value?.date_value ?? "";
+  const match = stored.match(/^([+-]?\d{1,6})(?:-(\d{2})(?:-(\d{2}))?)?$/);
+  const fallbackYear = typeof value === "object" && value ? value.year : null;
+  if (!match)
+    return {
+      year: fallbackYear ?? null,
+      date_value: null,
+      precision: "year",
+    };
+  const year = Number(match[1]);
+  const month = match[2];
+  const day = match[3];
+  return {
+    year,
+    date_value: month ? `${match[1]}-${month}${day ? `-${day}` : ""}` : null,
+    precision: day ? "day" : month ? "month" : "year",
+  };
+}
+
+function dateYearText(year: number) {
+  const digits = String(Math.abs(year)).padStart(4, "0");
+  return year < 0 ? `-${digits}` : digits;
+}
+
+function dateValue(year: number | null, month: number | null, day: number | null) {
+  if (year === null) return { year: null, date_value: null, precision: "year" };
+  const yearText = dateYearText(year);
+  if (month === null) return { year, date_value: null, precision: "year" };
+  const monthText = String(month).padStart(2, "0");
+  if (day === null)
+    return { year, date_value: `${yearText}-${monthText}`, precision: "month" };
+  return {
+    year,
+    date_value: `${yearText}-${monthText}-${String(day).padStart(2, "0")}`,
+    precision: "day",
+  };
+}
+
+function daysInWorldMonth(year: number, month: number) {
+  if (month === 2) {
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function DatePrecisionEditor({
+  value,
+  disabled,
+  onChange,
+  onIssue,
+}: {
+  value: DateParts;
+  disabled: boolean;
+  onChange: (value: DateParts) => void;
+  onIssue: (message: string) => void;
+}) {
+  const parsed = readDateParts(value);
+  const year = parsed.year ?? null;
+  const components = parsed.date_value?.match(/^[+-]?\d{1,6}-(\d{2})(?:-(\d{2}))?$/);
+  const month = components ? Number(components[1]) : null;
+  const day = components?.[2] ? Number(components[2]) : null;
+  const days = year !== null && month !== null
+    ? daysInWorldMonth(year, month)
+    : 31;
+
+  const write = (year: number | null, nextMonth: number | null, nextDay: number | null) =>
+    onChange(dateValue(year, nextMonth, nextDay));
+
+  return (
+    <div className="world-date-editor" role="group" aria-label="日期精度">
+      <input
+        aria-label="年份"
+        type="number"
+        inputMode="numeric"
+        min={-999999}
+        max={999999}
+        value={year ?? ""}
+        placeholder="年"
+        disabled={disabled}
+        onChange={(event) => {
+          const raw = event.target.value;
+          if (!raw) {
+            write(null, null, null);
+            return;
+          }
+          const year = Number(raw);
+          if (!Number.isInteger(year) || Math.abs(year) > 999999) {
+            onIssue("年份需为 -999999 至 999999 之间的整数");
+            return;
+          }
+          let nextDay = day;
+          if (month !== null && day !== null && day > daysInWorldMonth(year, month)) {
+            nextDay = null;
+            onIssue("该年份的公历日期无效，已清除日字段");
+          }
+          write(year, month, nextDay);
+        }}
+      />
+      <select
+        aria-label="月份"
+        value={month ?? ""}
+        disabled={disabled}
+        onChange={(event) => {
+          if (year === null) {
+            onIssue("请先填写年份，再选择月份");
+            return;
+          }
+          const nextMonth = event.target.value ? Number(event.target.value) : null;
+          let nextDay = nextMonth === month ? day : null;
+          if (nextMonth !== null && day !== null && day > daysInWorldMonth(year, nextMonth)) {
+            nextDay = null;
+            onIssue("该月份没有这一天，已清除日字段");
+          }
+          write(year, nextMonth, nextDay);
+        }}
+      >
+        <option value="">月</option>
+        {Array.from({ length: 12 }, (_, index) => index + 1).map((item) => (
+          <option value={item} key={item}>{item} 月</option>
+        ))}
+      </select>
+      <select
+        aria-label="日"
+        value={day ?? ""}
+        disabled={disabled}
+        onChange={(event) => {
+          if (year === null || month === null) {
+            onIssue(year === null ? "请先填写年份，再选择日期" : "请先填写月份，再选择日期");
+            return;
+          }
+          const nextDay = event.target.value ? Number(event.target.value) : null;
+          if (nextDay !== null && (nextDay < 1 || nextDay > daysInWorldMonth(year, month))) {
+            onIssue("该日期不符合公历大小月或闰年规则");
+            return;
+          }
+          write(year, month, nextDay);
+        }}
+      >
+        <option value="">日</option>
+        {Array.from({ length: days }, (_, index) => index + 1).map((item) => (
+          <option value={item} key={item}>{item} 日</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function WorldDateInput({
+  value,
+  disabled,
+  onChange,
+  onIssue,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: unknown) => void;
+  onIssue: (message: string) => void;
+}) {
+  const parsed = readDateParts(typeof value === "string" ? value : value as DateParts | null);
+  return (
+    <DatePrecisionEditor
+      value={parsed}
+      disabled={disabled}
+      onIssue={onIssue}
+      onChange={(next) =>
+        onChange(next.date_value ?? (next.year == null ? "" : dateYearText(next.year)))
+      }
+    />
+  );
+}
+
 function PropertyEditor({
   field,
   value,
   disabled,
   entities,
+  onIssue,
   allowEmpty = true,
   onChange,
 }: {
@@ -2581,6 +2946,7 @@ function PropertyEditor({
   value: unknown;
   disabled: boolean;
   entities: EntitySummary[];
+  onIssue: (message: string) => void;
   allowEmpty?: boolean;
   onChange: (value: unknown) => void;
 }) {
@@ -2614,12 +2980,11 @@ function PropertyEditor({
     );
   } else if (field.field_type === "date") {
     control = (
-      <input
-        type="text"
-        value={textValue}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="年 / YYYY-MM-DD"
+      <WorldDateInput
+        value={value}
         disabled={disabled}
+        onIssue={onIssue}
+        onChange={onChange}
       />
     );
   } else if (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .app_identity import set_webview_window_icon
 from .bridge_api import BridgeAPI
 
 
@@ -35,6 +36,7 @@ def run_webview() -> int:
         background_color="#F4F6F9",
     )
     api.bind_window(window)
+    window.events.shown += lambda *_args: set_webview_window_icon(window)
     webview.start(debug=bool(dev_url), http_server=False, private_mode=False)
     api.close_project()
     return 0
