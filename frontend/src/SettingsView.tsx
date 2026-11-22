@@ -337,6 +337,15 @@ export default function SettingsView({
         </nav>
       </header>
 
+      <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={tab}
+        className="settings-tab-content"
+        initial={{ opacity: 0, y: 5 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -3 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      >
       {tab === "library" ? (
         <form
           className="settings-form"
@@ -475,6 +484,19 @@ export default function SettingsView({
               </button>
             </div>
           </section>
+          <section className="settings-section visual-settings">
+            <div className="settings-section-title"><h2>视觉动效与性能</h2></div>
+            <label>
+              <span>背景粒子</span>
+              <input type="checkbox" checked={particlesEnabled}
+                onChange={(event) => onParticlesChange(event.target.checked)} />
+            </label>
+            <label>
+              <span>界面过渡动画</span>
+              <input type="checkbox" checked={transitionsEnabled}
+                onChange={(event) => onTransitionsChange(event.target.checked)} />
+            </label>
+          </section>
           <section className="settings-section preference-section">
             <div className="settings-section-title">
               <div>
@@ -496,19 +518,6 @@ export default function SettingsView({
                   ? "词条正文、属性、关联和资料库设置均可写入本地数据库。"
                   : "当前资料库权限不允许写入，设置和词条内容无法保存。"}
             </p>
-          </section>
-          <section className="settings-section visual-settings">
-            <div className="settings-section-title"><h2>视觉动效与性能</h2></div>
-            <label>
-              <span>背景粒子</span>
-              <input type="checkbox" checked={particlesEnabled}
-                onChange={(event) => onParticlesChange(event.target.checked)} />
-            </label>
-            <label>
-              <span>界面过渡动画</span>
-              <input type="checkbox" checked={transitionsEnabled}
-                onChange={(event) => onTransitionsChange(event.target.checked)} />
-            </label>
           </section>
           <section className="settings-section feedback-section">
             <div className="settings-section-title">
@@ -847,16 +856,18 @@ export default function SettingsView({
           </section>
         </div>
       )}
+      </motion.div>
+      </AnimatePresence>
       <AnimatePresence>
         {saveNotice > 0 && (
           <motion.div
             key={saveNotice}
             role="status"
             className="settings-save-toast glass-menu"
-            initial={{ opacity: 0, y: 8 }}
+            initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 5 }}
-            transition={{ duration: 0.18 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
               <motion.path

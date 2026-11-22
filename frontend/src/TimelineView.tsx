@@ -1,8 +1,8 @@
 import { formatWorldDate } from "./worldDate";
 import Dropdown from "./Dropdown";
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarDays, ChevronRight, ExternalLink, Filter, X } from "lucide-react";
-import { useState } from "react";
+import { CalendarDays, ChevronRight, ExternalLink, Filter, Network, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
 import ElasticScroll from "./ElasticScroll";
 
@@ -11,17 +11,31 @@ export default function TimelineView({
   types,
   era,
   onSelect,
+  onRelatedGraph,
 }: {
   events: TimelineEntry[];
   types: EntityType[];
   era: string;
   onSelect: (entityId: string) => void;
+  onRelatedGraph: (entityId: string) => void;
 }) {
   const [typeId, setTypeId] = useState("");
   const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entityId: string } | null>(null);
   const filtered = events.filter(
     (event) => !typeId || event.type_id === typeId,
   );
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("blur", dismiss);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("blur", dismiss);
+    };
+  }, [contextMenu]);
 
   return (
     <div className="timeline-page">
@@ -51,6 +65,14 @@ export default function TimelineView({
                 className="timeline-card"
                 key={event.id}
                 onClick={() => setSelectedEvent(event)}
+                onContextMenu={(pointerEvent) => {
+                  pointerEvent.preventDefault();
+                  setContextMenu({
+                    x: Math.max(8, Math.min(pointerEvent.clientX, window.innerWidth - 210)),
+                    y: Math.max(8, Math.min(pointerEvent.clientY, window.innerHeight - 80)),
+                    entityId: event.entity_id,
+                  });
+                }}
               >
                 <span className="timeline-card-node" />
                 <span className="timeline-card-date">
@@ -76,6 +98,33 @@ export default function TimelineView({
           </div>
         )}
       </ElasticScroll>
+      <AnimatePresence>
+        {contextMenu && (
+          <motion.div
+            className="context-menu glass-menu"
+            role="menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            initial={{ opacity: 0, scale: 0.96, y: 4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.98, y: 3 }}
+            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              role="menuitem"
+              onClick={() => {
+                const { entityId } = contextMenu;
+                setContextMenu(null);
+                onRelatedGraph(entityId);
+              }}
+            >
+              <Network size={14} />
+              关联图谱
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {selectedEvent && (
           <motion.div

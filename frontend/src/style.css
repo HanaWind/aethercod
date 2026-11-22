@@ -2307,6 +2307,9 @@ kbd {
 .settings-tabs button { display: inline-flex; height: 28px; align-items: center; gap: 6px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
 .settings-tabs button.active { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--text); }
 .settings-form { min-height: 0; flex: 1; overflow: auto; padding: 23px 27px 45px; }
+.settings-tab-content { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
+.settings-tab-content > .settings-form { width: 100%; }
+.settings-tab-content > .taxonomy-settings { min-height: 0; flex: 1; }
 .settings-section { max-width: 870px; margin: 0 auto 19px; padding: 17px; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in srgb, var(--panel) 73%, transparent); }
 .settings-section-title { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
 .settings-section-title > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
@@ -2672,9 +2675,8 @@ select:focus,
 .save-interval-field { margin-bottom: 5px; }
 .settings-save-toast {
   position: fixed;
-  top: 13px;
-  left: 50%;
-  translate: -50% 0;
+  right: 18px;
+  bottom: 18px;
   z-index: 65;
   display: flex;
   align-items: center;
@@ -2691,8 +2693,8 @@ select:focus,
 .status-toast {
   position: fixed;
   z-index: 85;
-  top: 13px;
-  left: 50%;
+  right: 18px;
+  bottom: 18px;
   display: flex;
   min-height: 38px;
   align-items: center;
@@ -2704,12 +2706,14 @@ select:focus,
   box-shadow: 0 10px 30px rgb(14 23 31 / 14%);
   color: var(--text);
   pointer-events: none;
-  translate: -50% 0;
   backdrop-filter: blur(16px) saturate(125%);
 }
 .status-toast svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .status-toast.success svg { color: var(--green); }
 .status-toast.error svg { color: #d24d58; }
+.type-list.no-overflow,
+.type-list.no-overflow > .elastic-scroll-content { overflow-y: hidden !important; scrollbar-width: none; }
+.type-list.no-overflow::-webkit-scrollbar { display: none; }
 .favorites-page { width: min(900px, 100%); min-height: 100%; margin: 0 auto; padding: 27px 30px 42px; }
 .favorites-page-scroll { min-height: 0; flex: 1; overflow: auto; }
 .favorites-page > .view-header { justify-content: space-between; }

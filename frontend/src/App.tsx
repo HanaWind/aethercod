@@ -22,6 +22,7 @@ import {
   Network,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
   Plus,
   Search,
   Save,
@@ -486,7 +487,18 @@ function Workspace({
 
   const toggleFavorite = () => {
     if (!draft || !state.writable) return;
-    updateDraft((current) => ({ ...current, is_favorite: !current.is_favorite }));
+    const isFavorite = !draft.is_favorite;
+    updateDraft((current) => ({ ...current, is_favorite: isFavorite }));
+    setState((current) => ({
+      ...current,
+      entities: current.entities.map((item) =>
+        item.id === draft.id ? { ...item, is_favorite: isFavorite } : item,
+      ),
+    }));
+    showStatusToast(
+      isFavorite ? "已加入收藏夹" : "已移出收藏夹",
+      "success",
+    );
   };
 
   const exportJson = async () => {
@@ -945,9 +957,9 @@ function Workspace({
     if (
       !state.writable ||
       (await actionDialog({
-        title: "移入回收站",
-        message: `将“${entityName}”移入回收站？`,
-        confirmLabel: "移入回收站",
+        title: "永久删除词条",
+        message: `永久删除“${entityName}”及其全部关联数据？此操作无法撤销。`,
+        confirmLabel: "永久删除",
         danger: true,
       })) === null
     )
@@ -981,13 +993,28 @@ function Workspace({
     if (draft) await removeEntity(draft.id, draft.name);
   };
 
+  useEffect(() => {
+    const onDeleteKey = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" || activeView !== "entries" || !draft) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, select, [contenteditable='true'], .editable-view, [role='textbox']")
+      ) return;
+      event.preventDefault();
+      void deleteEntity();
+    };
+    window.addEventListener("keydown", onDeleteKey);
+    return () => window.removeEventListener("keydown", onDeleteKey);
+  }, [activeView, draft, selectedId, state.writable]);
+
   const deleteGraphNode = async (entityId: string, name: string) => {
     if (
       !state.writable ||
       !(await flushDraft()) ||
       (await actionDialog({
-        title: "永久删除图谱节点",
-        message: `永久删除“${name}”及其所有关联关系？`,
+        title: "永久删除词条",
+        message: `永久删除“${name}”及其全部关联数据？此操作无法撤销。`,
         confirmLabel: "永久删除",
         danger: true,
       })) === null
@@ -1480,7 +1507,7 @@ function Workspace({
                 state.writable && (
                   <button
                     className="icon-button"
-                    title="移入回收站"
+                    title="删除词条"
                     onClick={() => void deleteEntity()}
                   >
                     <Trash2 size={15} />
@@ -1565,6 +1592,10 @@ function Workspace({
               types={state.types}
               era={state.project.era_name}
               onSelect={selectById}
+              onRelatedGraph={(entityId) => {
+                setGraphFilterIds([entityId]);
+                void navigateTo("graph");
+              }}
             />
           ) : activeView === "graph" && state.project ? (
             <GraphView
@@ -2406,6 +2437,7 @@ function Workspace({
                       disabled={!state.writable}
                       onClick={() => void renameEntity(entity.id)}
                     >
+                      <Pencil size={14} />
                       重命名词条
                     </button>
                     <button
@@ -2414,7 +2446,7 @@ function Workspace({
                       onClick={() => void removeEntity(entity.id, entity.name)}
                     >
                       <Trash2 size={14} />
-                      移入回收站
+                      删除词条
                     </button>
                   </>
                 );
@@ -2698,10 +2730,10 @@ function Workspace({
             key={statusToast.key}
             className={`status-toast glass-menu ${statusToast.kind}`}
             role="status"
-            initial={{ opacity: 0, y: -8, scale: 0.97 }}
+            initial={{ opacity: 0, y: 18, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -5, scale: 0.98 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
+            exit={{ opacity: 0, y: 14, scale: 0.98 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               {statusToast.kind === "success" ? (

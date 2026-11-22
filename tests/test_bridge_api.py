@@ -257,6 +257,10 @@ def test_bridge_manages_types_fields_graph_and_read_only_mode(tmp_path):
     assert api.delete_field(field["id"])
     assert api.get_entity(saved["id"])["custom_fields"] == {}
     assert api.delete_entity(target["id"])
+    assert api.get_entity(target["id"]) is None
+    assert api._conn.execute(
+        "SELECT 1 FROM entities WHERE id=?", (target["id"],)
+    ).fetchone() is None
     assert api.get_history(target["id"])[0]["change_type"] == "delete"
     assert api.get_graph()["edges"] == []
     empty_type = api.create_type("空类型")

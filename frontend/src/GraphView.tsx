@@ -692,7 +692,7 @@ export default function GraphView({
               }}
             >
               <Trash2 size={14} />
-              删除节点
+              删除词条
             </button>
           </motion.div>
         )}

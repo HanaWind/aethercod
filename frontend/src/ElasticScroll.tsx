@@ -1,5 +1,5 @@
 import { motion, useReducedMotionConfig } from "framer-motion";
-import { useEffect, useRef, useState, type ReactNode, type WheelEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type WheelEvent } from "react";
 
 export default function ElasticScroll({
   className,
@@ -9,6 +9,9 @@ export default function ElasticScroll({
   children: ReactNode;
 }) {
   const [offset, setOffset] = useState(0);
+  const [overflowing, setOverflowing] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const reduceMotion = useReducedMotionConfig();
   const resetTimer = useRef<number | undefined>(undefined);
 
@@ -17,8 +20,24 @@ export default function ElasticScroll({
     [],
   );
 
+  useLayoutEffect(() => {
+    const element = container.current;
+    const child = content.current;
+    if (!element || !child) return;
+    const measure = () => {
+      const hasOverflow = child.scrollHeight > element.clientHeight + 1;
+      setOverflowing(hasOverflow);
+      if (!hasOverflow) setOffset(0);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    observer.observe(child);
+    measure();
+    return () => observer.disconnect();
+  }, [children]);
+
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (reduceMotion) return;
+    if (reduceMotion || !overflowing) return;
     const element = event.currentTarget;
     if (
       event.target instanceof Element &&
@@ -37,8 +56,13 @@ export default function ElasticScroll({
   };
 
   return (
-    <div className={className} onWheel={handleWheel}>
+    <div
+      ref={container}
+      className={`${className}${overflowing ? " has-overflow" : " no-overflow"}`}
+      onWheel={handleWheel}
+    >
       <motion.div
+        ref={content}
         className="elastic-scroll-content"
         animate={{ y: reduceMotion ? 0 : offset }}
         transition={{ type: "spring", stiffness: 420, damping: 28, mass: 0.55 }}

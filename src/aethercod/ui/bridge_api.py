@@ -537,17 +537,7 @@ class BridgeAPI:
 
     @_serialized
     def delete_entity(self, entity_id: str) -> bool:
-        service = self._ensure_writable()
-        entity = service.entities.get(str(entity_id), include_deleted=False)
-        if entity is None:
-            return False
-        assert self._conn is not None and self._history is not None
-        with atomic(self._conn):
-            service.entities.soft_delete(entity.id, commit=False)
-            deleted = service.entities.get(entity.id)
-            if deleted is not None:
-                self._save_entity_snapshot(deleted, "delete", f"移入回收站「{deleted.name}」")
-        return True
+        return self.delete_graph_node(entity_id)
 
     @_serialized
     def delete_graph_node(self, entity_id: str) -> bool:
@@ -567,7 +557,7 @@ class BridgeAPI:
             self._save_entity_snapshot(
                 entity,
                 "delete",
-                f"从关系图谱永久删除「{entity.name}」及其 {len(relations)} 条关联",
+                f"永久删除词条「{entity.name}」及其 {len(relations)} 条关联",
             )
             self._conn.execute(
                 "DELETE FROM relations WHERE source_id=? OR target_id=?",
