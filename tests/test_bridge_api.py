@@ -387,6 +387,35 @@ def test_bridge_opens_only_project_github_links_externally(tmp_path, monkeypatch
     api.close_project()
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("win32", lambda path: f'explorer.exe /select,"{path}"'),
+        ("darwin", lambda path: ["open", "-R", str(path)]),
+        ("linux", lambda path: ["xdg-open", str(path.parent)]),
+    ],
+)
+def test_bridge_reveals_current_project_file_in_read_only_mode(
+    tmp_path, monkeypatch, platform, expected
+):
+    from types import SimpleNamespace
+
+    import aethercod.ui.bridge_api as bridge_module
+
+    api = BridgeAPI()
+    path = tmp_path / "资料库 with spaces.aethercod"
+    api.create_project(str(path), "资料库", "纪年")
+    api.set_read_only(True)
+    commands = []
+    monkeypatch.setattr(bridge_module, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(bridge_module.subprocess, "Popen", commands.append)
+    api.reveal_project_file()
+    api.close_project()
+    with pytest.raises(RuntimeError, match="No project"):
+        api.reveal_project_file()
+    assert commands == [expected(path.resolve())]
+
+
 def test_bridge_permanently_deletes_graph_node_and_all_relationship_data(tmp_path):
     api = BridgeAPI()
     api.create_project(str(tmp_path / "graph-delete.aethercod"), "图谱删除", "纪年")

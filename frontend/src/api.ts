@@ -98,6 +98,7 @@ export type HistoryEntry = {
 export type GraphNode = EntitySummary & {
   x: number;
   y: number;
+  position_saved?: boolean;
 };
 
 export type GraphEdge = {
@@ -185,6 +186,7 @@ export type BridgeApi = {
   export_json(): Promise<boolean>;
   import_json(): Promise<ProjectState>;
   open_external_url(url: string): Promise<boolean>;
+  reveal_project_file(): Promise<void>;
   window_maximized(): Promise<boolean>;
   window_action(
     action: "minimize" | "maximize" | "restore" | "close",

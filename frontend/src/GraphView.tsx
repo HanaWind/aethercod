@@ -18,13 +18,13 @@ import {
   type CSSProperties,
 } from "react";
 import type { EntitySummary, EntityType, GraphData, GraphNode } from "./api";
+import { initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius } from "./graphLayout";
 
-const WIDTH = 1000;
-const HEIGHT = 700;
+const MIN_ZOOM = 0.35;
+const MAX_ZOOM = 2.2;
+const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 type NodeMenu = { id: string; x: number; y: number } | null;
 type Point = { x: number; y: number };
-
-const nodeRadius = (name: string) => Math.max(72, Math.min(96, name.length * 8 + 36));
 
 function floatStyle(node: GraphNode, enabled: boolean): CSSProperties | undefined {
   if (!enabled) return;
@@ -40,7 +40,9 @@ export default function GraphView({
   types,
   entities,
   selectedIds,
+  relatedEntityId,
   onFilterChange,
+  onRelatedGraph,
   motionEnabled,
   writable,
   onSelect,
@@ -51,7 +53,9 @@ export default function GraphView({
   types: EntityType[];
   entities: EntitySummary[];
   selectedIds: string[];
+  relatedEntityId: string;
   onFilterChange: (ids: string[]) => void;
+  onRelatedGraph: (id: string) => void;
   motionEnabled: boolean;
   writable: boolean;
   onSelect: (entityId: string) => void;
@@ -78,12 +82,16 @@ export default function GraphView({
   const dragHoldTimer = useRef<number | undefined>(undefined);
   const displayedFocus = useRef<Record<string, Point>>({});
   const positionAnimation = useRef(0);
-  const canvas = useRef<SVGSVGElement>(null);
+  const canvas = useRef<HTMLDivElement>(null);
   const scene = useRef<SVGGElement>(null);
   const lineMaskId = useId();
+  const { nodes: initialNodes, width: WIDTH, height: HEIGHT } = useMemo(
+    () => initializeGraphLayout(graph.nodes),
+    [graph.nodes],
+  );
   const baseNodes = useMemo(
-    () => graph.nodes.map((node) => ({ ...node, ...positions[node.id] })),
-    [graph.nodes, positions],
+    () => initialNodes.map((node) => ({ ...node, ...positions[node.id] })),
+    [initialNodes, positions],
   );
   const nodes = useMemo(
     () => baseNodes.map((node) => ({ ...node, ...focusPositions[node.id] })),
@@ -157,16 +165,17 @@ export default function GraphView({
   }, [nodeMenu]);
 
   useEffect(() => {
-    const svg = canvas.current;
-    if (!svg) return;
+    const element = canvas.current;
+    if (!element) return;
     const zoomFromWheel = (event: WheelEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      const factor = Math.exp(-event.deltaY * 0.0012);
-      setZoom((current) => Math.max(0.35, Math.min(2.2, current * factor)));
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
+      const factor = Math.exp(-event.deltaY * unit * 0.0012);
+      setZoom((current) => clampZoom(current * factor));
     };
-    svg.addEventListener("wheel", zoomFromWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", zoomFromWheel);
+    element.addEventListener("wheel", zoomFromWheel, { passive: false });
+    return () => element.removeEventListener("wheel", zoomFromWheel);
   }, []);
 
   const moveNode = (event: PointerEvent<SVGSVGElement>) => {
@@ -404,12 +413,11 @@ export default function GraphView({
   };
 
   const zoomBy = (amount: number) =>
-    setZoom((current) => Math.max(0.35, Math.min(2.2, current + amount)));
+    setZoom((current) => clampZoom(current + amount));
 
   const fit = () => {
     setZoom(1);
     resetFocus();
-    setPositions({});
   };
 
   const changeFilters = (ids: string[]) => {
@@ -423,7 +431,7 @@ export default function GraphView({
     setNodeMenu({
       id: node.id,
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 196)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 70)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 88)),
     });
   };
 
@@ -432,14 +440,14 @@ export default function GraphView({
       <header className="view-header">
         <div>
           <span className="section-kicker">实体与关系</span>
-          <h1>关系图谱</h1>
+          <h1>{relatedEntityId ? "关联图谱" : "关系网"}</h1>
         </div>
         <div className="graph-filter-wrap">
           <div className="graph-filter-input">
             <Search size={14} />
             <input
               value={filterQuery}
-              aria-label="筛选关系图谱词条"
+              aria-label="筛选关系网词条"
               placeholder="搜索并筛选词条"
               onFocus={() => setFilterOpen(true)}
               onChange={(event) => {
@@ -523,19 +531,18 @@ export default function GraphView({
           >
             <ZoomIn size={15} />
           </button>
-          <button className="icon-button" title="适配图谱" onClick={fit}>
+          <button className="icon-button" title="适配视图" onClick={fit}>
             <Maximize2 size={15} />
           </button>
         </div>
       </header>
-      {visibleGraph.nodes.length ? (
-        <div className="graph-canvas-wrap">
+      <div className="graph-canvas-wrap" ref={canvas}>
+        {visibleGraph.nodes.length ? (
           <svg
-            ref={canvas}
             className="graph-canvas"
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             role="group"
-            aria-label="词条关系图谱"
+            aria-label={relatedEntityId ? "词条关联图谱" : "词条关系网"}
             onPointerMove={moveNode}
             onPointerUp={finishDrag}
             onPointerCancel={finishDrag}
@@ -544,7 +551,7 @@ export default function GraphView({
               ref={scene}
               style={{ transformBox: "view-box", transformOrigin: "center" }}
               animate={{ scale: zoom }}
-              transition={{ type: "spring", stiffness: 240, damping: 30 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
             >
               <defs>
                 {/* Cut the edges out below the glass while keeping the canvas visible. */}
@@ -563,7 +570,7 @@ export default function GraphView({
                         className="graph-node-drift"
                         style={floatStyle(node, motionEnabled && node.id !== centeredNodeId)}
                         rx={nodeRadius(node.name)}
-                        ry={36}
+                        ry={NODE_HALF_HEIGHT}
                         fill="black"
                       />
                     </g>
@@ -612,6 +619,7 @@ export default function GraphView({
                   transition={{ duration: 0.17 }}
                   aria-label={`${node.name}，单击居中，双击打开`}
                   aria-pressed={node.id === centeredNodeId}
+                  style={{ "--node-color": node.color } as CSSProperties}
                   transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}
                   onPointerDown={(event) => {
                     if (event.button !== 0 || !writable) return;
@@ -635,11 +643,16 @@ export default function GraphView({
                 >
                   <g className="graph-node-drift"
                     style={floatStyle(node, motionEnabled && node.id !== centeredNodeId)}>
-                    <foreignObject x={-nodeRadius(node.name)} y={-36}
-                      width={2 * nodeRadius(node.name)} height={72}>
-                      <div className="graph-node-glass"
-                        style={{ "--node-color": node.color } as CSSProperties} />
+                    <foreignObject x={-nodeRadius(node.name)} y={-NODE_HALF_HEIGHT}
+                      width={2 * nodeRadius(node.name)} height={2 * NODE_HALF_HEIGHT}>
+                      <div className="graph-node-glass" />
                     </foreignObject>
+                    <ellipse
+                      className="graph-node-outline"
+                      rx={nodeRadius(node.name)}
+                      ry={NODE_HALF_HEIGHT}
+                      vectorEffect="non-scaling-stroke"
+                    />
                     <circle
                       className="graph-node-indicator"
                       cx="-49"
@@ -661,14 +674,13 @@ export default function GraphView({
               </AnimatePresence>
             </motion.g>
           </svg>
-        </div>
-      ) : (
-        <div className="empty-view">
-          <Network size={22} />
-          <strong>关系图谱尚无节点</strong>
-          <span>创建词条并建立关联后，图谱会在这里展开。</span>
-        </div>
-      )}
+        ) : (
+          <div className="empty-view graph-empty">
+            <Network size={22} />
+            <strong>{relatedEntityId ? "关联图谱暂无节点" : "关系网暂无节点"}</strong>
+          </div>
+        )}
+      </div>
       <AnimatePresence>
         {nodeMenu && (
           <motion.div
@@ -683,8 +695,22 @@ export default function GraphView({
             onContextMenu={(event) => event.preventDefault()}
           >
             <button
+              role="menuitem"
+              onClick={() => {
+                resetFocus();
+                setFilterQuery("");
+                setFilterOpen(false);
+                setNodeMenu(null);
+                onRelatedGraph(nodeMenu.id);
+              }}
+            >
+              <Network size={14} />
+              显示关联图谱
+            </button>
+            <button
               className="danger-menu-item"
               role="menuitem"
+              disabled={!writable}
               onClick={() => {
                 const node = nodes.find((item) => item.id === nodeMenu.id);
                 setNodeMenu(null);

@@ -192,6 +192,7 @@ function Workspace({
   const [categoryDraft, setCategoryDraft] = useState("");
   const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [] });
   const [graphFilterIds, setGraphFilterIds] = useState<string[]>([]);
+  const [relatedGraphId, setRelatedGraphId] = useState("");
   const [contextMenu, setContextMenu] = useState<{
     kind: "type" | "entity" | "library";
     id: string;
@@ -283,6 +284,7 @@ function Workspace({
       setGlobalTimeline([]);
       setGraph({ nodes: [], edges: [] });
       setGraphFilterIds([]);
+      setRelatedGraphId("");
       setHistory([]);
       historyEntity.current = "";
       setActiveView("entries");
@@ -461,7 +463,9 @@ function Workspace({
     try {
       if (!state.read_only && !(await flushDraft())) return;
       setShowRelationForm(false);
-      syncState(await api.set_read_only(!state.read_only));
+      const next = await api.set_read_only(!state.read_only);
+      syncState(next);
+      showStatusToast(next.read_only ? "已切换至只读模式" : "已切换至编辑模式", "success");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -478,11 +482,10 @@ function Workspace({
     }
   };
 
-  const showRelatedGraph = async () => {
-    if (!draft) return;
-    if (!(await flushDraft())) return;
-    setGraphFilterIds([draft.id]);
-    await navigateTo("graph");
+  const openRelatedGraph = (id: string) => {
+    setRelatedGraphId(id);
+    setGraphFilterIds([id]);
+    void navigateTo("graph");
   };
 
   const toggleFavorite = () => {
@@ -910,7 +913,7 @@ function Workspace({
     if (
       !draft ||
       !state.writable ||
-      !relationValues.target_id ||
+      !state.entities.some((entity) => entity.id === relationValues.target_id && entity.id !== draft.id) ||
       !relationValues.label.trim() ||
       !(await flushDraft())
     )
@@ -1252,14 +1255,15 @@ function Workspace({
                   <button
                     className={activeView === "graph" ? "active" : ""}
                     aria-disabled={!state.project}
-                    onClick={() =>
-                      state.project
-                        ? void navigateTo("graph")
-                        : promptForProject()
-                    }
+                    onClick={() => {
+                      if (!state.project) return promptForProject();
+                      setRelatedGraphId("");
+                      setGraphFilterIds([]);
+                      void navigateTo("graph");
+                    }}
                   >
                     <Network size={15} />
-                    <span className="sidebar-action-label">关系图谱</span>
+                    <span className="sidebar-action-label">关系网</span>
                   </button>
                   <button
                     className={activeView === "favorites" ? "active" : ""}
@@ -1486,7 +1490,7 @@ function Workspace({
                 {activeView === "timeline"
                   ? "时间线"
                   : activeView === "graph"
-                    ? "关系图谱"
+                    ? (relatedGraphId ? "关联图谱" : "关系网")
                     : activeView === "favorites"
                       ? "收藏夹"
                     : activeView === "settings"
@@ -1540,7 +1544,11 @@ function Workspace({
                 <button
                   className={`toolbar-text-action ${compactWindow ? "compact" : ""}`}
                   title="查看当前词条及其直接关联图谱"
-                  onClick={() => void showRelatedGraph()}
+                  onClick={() => {
+                    void flushDraft().then((saved) => {
+                      if (saved) openRelatedGraph(draft.id);
+                    });
+                  }}
                 >
                   <Network size={14} />
                   {!compactWindow && <span>关联图谱</span>}
@@ -1592,10 +1600,7 @@ function Workspace({
               types={state.types}
               era={state.project.era_name}
               onSelect={selectById}
-              onRelatedGraph={(entityId) => {
-                setGraphFilterIds([entityId]);
-                void navigateTo("graph");
-              }}
+              onRelatedGraph={openRelatedGraph}
             />
           ) : activeView === "graph" && state.project ? (
             <GraphView
@@ -1603,7 +1608,15 @@ function Workspace({
               types={state.types}
               entities={state.entities}
               selectedIds={graphFilterIds}
-              onFilterChange={setGraphFilterIds}
+              relatedEntityId={relatedGraphId}
+              onFilterChange={(ids) => {
+                setGraphFilterIds(ids);
+                if (ids.length !== 1 || ids[0] !== relatedGraphId) setRelatedGraphId("");
+              }}
+              onRelatedGraph={(id) => {
+                setRelatedGraphId(id);
+                setGraphFilterIds([id]);
+              }}
               motionEnabled={motionEnabled}
               writable={state.writable}
               onSelect={selectById}
@@ -2003,7 +2016,16 @@ function Workspace({
                                   disabled={!state.writable}
                                 />
                               </div>
-                              <button className="small-submit" type="submit">
+                              <button
+                                className="small-submit"
+                                type="submit"
+                                disabled={
+                                  !relationValues.label.trim() ||
+                                  !state.entities.some((entity) =>
+                                    entity.id === relationValues.target_id && entity.id !== draft.id,
+                                  )
+                                }
+                              >
                                 保存关联
                               </button>
                             </motion.form>

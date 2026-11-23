@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
+import sys
 from threading import RLock
 from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
@@ -607,6 +609,21 @@ class BridgeAPI:
         return self.get_state()
 
     @_serialized
+    def reveal_project_file(self) -> None:
+        self._require_service()
+        path = Path(self._path)
+        if not path.is_file():
+            raise FileNotFoundError("当前资料库文件已移动或删除")
+        if sys.platform == "win32":
+            # Explorer expects the path quoted after the comma, rather than the whole switch.
+            command = f'explorer.exe /select,"{path}"'
+        elif sys.platform == "darwin":
+            command = ["open", "-R", str(path)]
+        else:
+            command = ["xdg-open", str(path.parent)]
+        subprocess.Popen(command)
+
+    @_serialized
     def open_external_url(self, url: str) -> bool:
         parsed = urlparse(str(url))
         if (
@@ -834,6 +851,7 @@ class BridgeAPI:
                     "color": entity.color,
                     "summary": entity.summary,
                     "is_favorite": entity.is_favorite,
+                    "position_saved": entity.id in saved_positions,
                     "x": saved_positions.get(
                         entity.id,
                         (0.5 + radius * math.cos(angle), 0.5 + radius * math.sin(angle)),

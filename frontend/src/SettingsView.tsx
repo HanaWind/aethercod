@@ -341,9 +341,9 @@ export default function SettingsView({
       <motion.div
         key={tab}
         className="settings-tab-content"
-        initial={{ opacity: 0, y: 5 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -3 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
       >
       {tab === "library" ? (
@@ -357,7 +357,15 @@ export default function SettingsView({
                 <span className="section-kicker">当前项目</span>
                 <h2>资料库信息</h2>
               </div>
-              <span className="path-label">{project.path}</span>
+              <button
+                type="button"
+                className="path-label"
+                aria-label={`在文件管理器中显示资料库 ${project.path}`}
+                title={project.path}
+                onClick={() => void desktopApi()?.reveal_project_file().catch((reason: Error) => onError(reason.message))}
+              >
+                {project.path}
+              </button>
             </div>
             <fieldset
               className="settings-field-grid"

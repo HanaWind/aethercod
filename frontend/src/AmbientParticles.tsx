@@ -48,6 +48,10 @@ export default function AmbientParticles({ theme }: { theme: "light" | "dark" })
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest(".visual-settings")) {
+        clearPointer();
+        return;
+      }
       const bounds = canvas.getBoundingClientRect();
       pointer.x = event.clientX - bounds.left;
       pointer.y = event.clientY - bounds.top;
