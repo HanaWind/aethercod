@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { CircleAlert } from "lucide-react";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 type Request = {
@@ -19,8 +19,11 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<
     (Request & { resolve: (value: string | null) => void }) | null
   >(null);
+  const pendingDialog = useRef<typeof dialog>(null);
   const [input, setInput] = useState("");
   const close = (value: string | null) => {
+    if (dialog !== pendingDialog.current) return;
+    pendingDialog.current = null;
     dialog?.resolve(value);
     setDialog(null);
   };
@@ -29,8 +32,11 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
     <DialogContext.Provider
       value={(request) =>
         new Promise((resolve) => {
+          pendingDialog.current?.resolve(null);
+          const next = { ...request, resolve };
+          pendingDialog.current = next;
           setInput(request.initialValue ?? "");
-          setDialog({ ...request, resolve });
+          setDialog(next);
         })
       }
     >

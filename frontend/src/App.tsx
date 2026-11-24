@@ -155,6 +155,7 @@ function Workspace({
   const [openTypeIds, setOpenTypeIds] = useState<Record<string, boolean>>({});
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [windowMaximized, setWindowMaximized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusToast, setStatusToast] = useState<{
@@ -221,6 +222,11 @@ function Workspace({
   const pendingSaves = useRef(
     new Map<string, { promise: Promise<void>; version: number }>(),
   );
+  const closeInProgress = useRef(false);
+  const settingsDirty = useRef(false);
+  const onSettingsDirtyChange = useCallback((value: boolean) => {
+    settingsDirty.current = value;
+  }, []);
   const paletteInput = useRef<HTMLInputElement>(null);
   const statusToastTimer = useRef<number | undefined>(undefined);
 
@@ -346,8 +352,9 @@ function Workspace({
 
   const flushDraft = useCallback(async () => {
     const api = desktopApi();
-    if (!api) return false;
+    if (!api || closeInProgress.current) return false;
     while (pendingDrafts.current.size > 0) {
+      if (closeInProgress.current) return false;
       const [entityId, change] = pendingDrafts.current.entries().next().value as [
         string,
         { entity: Entity; version: number },
@@ -412,6 +419,47 @@ function Workspace({
     }
     return true;
   }, [selectedId]);
+
+  const requestClose = useCallback(async (target: "project" | "window") => {
+    const api = desktopApi();
+    if (!api || closeInProgress.current) return;
+    closeInProgress.current = true;
+    setClosing(true);
+    let windowClosing = false;
+    try {
+      // Commit controls that stage their value on blur before inspecting the drafts.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if ((pendingDrafts.current.size > 0 || settingsDirty.current) && (await actionDialog({
+        title: "是否丢弃修改？",
+        message: target === "project"
+          ? "当前资料库有未保存的修改。关闭资料库会丢弃这些修改。"
+          : "当前资料库有未保存的修改。退出程序会丢弃这些修改。",
+        confirmLabel: "放弃修改并关闭",
+        danger: true,
+      })) === null) return;
+
+      await Promise.allSettled([...pendingSaves.current.values()].map(({ promise }) => promise));
+      if (target === "project") {
+        syncState(await api.close_project());
+      } else {
+        await api.window_action("close");
+        windowClosing = true;
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (!windowClosing) {
+        closeInProgress.current = false;
+        setClosing(false);
+      }
+    }
+  }, [actionDialog, syncState]);
+
+  useLayoutEffect(() => {
+    const closeWindow = () => void requestClose("window");
+    window.addEventListener("aethercod:close-request", closeWindow);
+    return () => window.removeEventListener("aethercod:close-request", closeWindow);
+  }, [requestClose]);
 
   const showStatusToast = useCallback(
     (message: string, kind: "success" | "error") => {
@@ -661,7 +709,7 @@ function Workspace({
   }, [activeView, state.entities, loadEntity, selectedId]);
 
   useEffect(() => {
-    if (!state.project || !state.writable || state.save_mode !== "interval") return;
+    if (closing || !state.project || !state.writable || state.save_mode !== "interval") return;
     const timer = window.setInterval(
       () => {
         if (pendingDrafts.current.size) void flushDraft();
@@ -670,6 +718,7 @@ function Workspace({
     );
     return () => window.clearInterval(timer);
   }, [
+    closing,
     flushDraft,
     intervalSaveCycle,
     state.project,
@@ -679,13 +728,14 @@ function Workspace({
   ]);
 
   useEffect(() => {
-    if (!dirty || !state.writable || state.save_mode !== "realtime") return;
+    if (closing || !dirty || !state.writable || state.save_mode !== "realtime") return;
     const timer = window.setTimeout(() => void flushDraft(), 360);
     return () => window.clearTimeout(timer);
-  }, [dirty, flushDraft, revision, state.save_mode, state.writable]);
+  }, [closing, dirty, flushDraft, revision, state.save_mode, state.writable]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (closeInProgress.current) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen(true);
@@ -805,16 +855,6 @@ function Workspace({
         syncState(next);
         setError("");
       }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-
-  const closeProject = async () => {
-    if (!(await flushDraft())) return;
-    try {
-      const next = await desktopApi()?.close_project();
-      if (next) syncState(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -998,6 +1038,7 @@ function Workspace({
 
   useEffect(() => {
     const onDeleteKey = (event: KeyboardEvent) => {
+      if (closeInProgress.current) return;
       if (event.key !== "Delete" || activeView !== "entries" || !draft) return;
       const target = event.target;
       if (
@@ -1097,7 +1138,7 @@ function Workspace({
           {state.project && state.writable && (
             <button
               className="topbar-save"
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || closing}
               title="保存所有未保存修改（Ctrl+S）"
               onClick={() => void manualSave()}
             >
@@ -1109,7 +1150,7 @@ function Workspace({
             <button
               className="close-library-pill"
               title="关闭当前资料库"
-              onClick={() => void closeProject()}
+              onClick={() => void requestClose("project")}
             >
               <FolderOpen size={13} />
               <span>关闭资料库</span>
@@ -1150,11 +1191,7 @@ function Workspace({
           <button
             className="icon-button window-control close-control"
             title="关闭"
-            onClick={() =>
-              void flushDraft().then((saved) => {
-                if (saved) return desktopApi()?.window_action("close");
-              })
-            }
+            onClick={() => void requestClose("window")}
           >
             <X size={15} />
           </button>
@@ -1545,9 +1582,13 @@ function Workspace({
                   className={`toolbar-text-action ${compactWindow ? "compact" : ""}`}
                   title="查看当前词条及其直接关联图谱"
                   onClick={() => {
-                    void flushDraft().then((saved) => {
-                      if (saved) openRelatedGraph(draft.id);
-                    });
+                    if (state.entities.some((entity) => entity.id === draft.id)) {
+                      openRelatedGraph(draft.id);
+                    } else {
+                      void flushDraft().then((saved) => {
+                        if (saved) openRelatedGraph(draft.id);
+                      });
+                    }
                   }}
                 >
                   <Network size={14} />
@@ -1588,6 +1629,7 @@ function Workspace({
               initialTypeId={settingsTypeId}
               onProjectUpdated={syncState}
               onChanged={refreshProject}
+              onDirtyChange={onSettingsDirtyChange}
               onError={reportError}
               particlesEnabled={particlesEnabled}
               transitionsEnabled={transitionsEnabled}
@@ -1606,7 +1648,9 @@ function Workspace({
             <GraphView
               graph={graph}
               types={state.types}
-              entities={state.entities}
+              entities={state.entities.map((entity) =>
+                pendingDrafts.current.get(entity.id)?.entity ?? entity,
+              )}
               selectedIds={graphFilterIds}
               relatedEntityId={relatedGraphId}
               onFilterChange={(ids) => {
@@ -1651,14 +1695,13 @@ function Workspace({
                       <ChevronRight size={14} />
                     </button>
                   ))}
-                  {!state.entities.some((entity) => entity.is_favorite) && (
-                    <div className="empty-view">
-                      <Star size={22} />
-                      <strong>收藏夹为空</strong>
-                      <span>在词条详情页点亮星标后，词条会列在这里。</span>
-                    </div>
-                  )}
                 </div>
+                {!state.entities.some((entity) => entity.is_favorite) && (
+                  <div className="empty-view favorites-empty">
+                    <Star size={22} />
+                    <strong>收藏夹为空</strong>
+                  </div>
+                )}
               </section>
             </ElasticScroll>
           ) : !state.project ? (

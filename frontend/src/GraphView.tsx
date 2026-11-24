@@ -140,6 +140,10 @@ export default function GraphView({
   );
   const visibleGraphRef = useRef(visibleGraph);
   visibleGraphRef.current = visibleGraph;
+  const entityColors = useMemo(
+    () => new Map(entities.map((entity) => [entity.id, entity.color])),
+    [entities],
+  );
 
   useEffect(
     () => () => {
@@ -619,7 +623,7 @@ export default function GraphView({
                   transition={{ duration: 0.17 }}
                   aria-label={`${node.name}，单击居中，双击打开`}
                   aria-pressed={node.id === centeredNodeId}
-                  style={{ "--node-color": node.color } as CSSProperties}
+                  style={{ "--node-color": entityColors.get(node.id) ?? node.color } as CSSProperties}
                   transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}
                   onPointerDown={(event) => {
                     if (event.button !== 0 || !writable) return;
@@ -657,7 +661,7 @@ export default function GraphView({
                       className="graph-node-indicator"
                       cx="-49"
                       r="4"
-                      fill={node.color}
+                      fill="var(--node-color)"
                     />
                     <text className="graph-node-name" y="-1">
                       {node.name.length > 18

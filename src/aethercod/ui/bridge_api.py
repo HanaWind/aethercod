@@ -9,7 +9,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-from threading import RLock
+from threading import RLock, Thread
 from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 import webbrowser
@@ -71,12 +71,26 @@ class BridgeAPI:
         self._path = ""
         self._maximized = False
         self._read_only = False
+        self._window_close_approved = False
 
     def bind_window(self, window: Any) -> None:
         self._window = window
+        self._window_close_approved = False
         self._maximized = bool(window.maximized)
         window.events.maximized += self._mark_maximized
         window.events.restored += self._mark_restored
+        window.events.closing += self._request_window_close
+
+    def _request_window_close(self) -> bool:
+        if self._window_close_approved or self._service is None:
+            return True
+        # The native closing handler runs synchronously on the GUI thread.
+        Thread(
+            target=self._window.run_js,
+            args=('window.dispatchEvent(new Event("aethercod:close-request"))',),
+            daemon=True,
+        ).start()
+        return False
 
     def _mark_maximized(self, *_args: Any) -> None:
         self._maximized = True
@@ -104,7 +118,12 @@ class BridgeAPI:
             self._window.restore()
             self._maximized = False
         elif action == "close":
-            self._window.destroy()
+            self._window_close_approved = True
+            try:
+                self._window.destroy()
+            except Exception:
+                self._window_close_approved = False
+                raise
 
     def _require_service(self) -> ProjectService:
         if self._service is None:

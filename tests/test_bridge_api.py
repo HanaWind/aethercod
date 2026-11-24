@@ -67,6 +67,7 @@ def test_bridge_window_control_toggles_maximize():
         def __init__(self):
             self.maximized = EventHook()
             self.restored = EventHook()
+            self.closing = EventHook()
 
     class FakeWindow:
         def __init__(self):
@@ -94,6 +95,34 @@ def test_bridge_window_control_toggles_maximize():
 
     assert window.actions == ["maximize", "restore"]
     assert api._maximized is False
+
+
+def test_native_close_is_deferred_until_the_frontend_approves(tmp_path):
+    from threading import Event
+    from unittest.mock import Mock
+
+    from webview.event import Event as WindowEvent
+
+    api = BridgeAPI()
+    api.create_project(str(tmp_path / "close.aethercod"))
+    notified = Event()
+    window = Mock(maximized=False)
+    window.events.maximized = WindowEvent(window)
+    window.events.restored = WindowEvent(window)
+    window.events.closing = WindowEvent(window, should_lock=True)
+    window.run_js.side_effect = lambda _script: notified.set()
+    api.bind_window(window)
+    try:
+        assert window.events.closing.set()
+        assert notified.wait(1)
+        assert "aethercod:close-request" in window.run_js.call_args.args[0]
+        window.destroy.assert_not_called()
+
+        api.window_action("close")
+        window.destroy.assert_called_once()
+        assert not window.events.closing.set()
+    finally:
+        api.close_project()
 
 
 def test_old_location_template_keeps_values_when_new_fields_are_seeded(tmp_path):

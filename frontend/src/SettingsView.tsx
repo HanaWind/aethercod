@@ -15,7 +15,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useState, type FormEvent } from "react";
 import {
   desktopApi,
   type EntityType,
@@ -63,6 +63,7 @@ export default function SettingsView({
   initialTypeId,
   onProjectUpdated,
   onChanged,
+  onDirtyChange,
   onError,
   particlesEnabled,
   transitionsEnabled,
@@ -74,6 +75,7 @@ export default function SettingsView({
   initialTypeId: string;
   onProjectUpdated: (state: ProjectState) => void;
   onChanged: () => Promise<void>;
+  onDirtyChange: (dirty: boolean) => void;
   onError: (message: string) => void;
   particlesEnabled: boolean;
   transitionsEnabled: boolean;
@@ -98,6 +100,31 @@ export default function SettingsView({
   const [saveInterval, setSaveInterval] = useState(state.save_interval);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [saveNotice, setSaveNotice] = useState(0);
+
+  const selectedType = types.find((type) => type.id === selectedTypeId);
+  const savedField = fields.find((field) => field.id === fieldDraft?.id);
+  const hasFieldChanges = fieldDraft !== null && (
+    fieldDraft.name !== (savedField?.name ?? "") ||
+    fieldDraft.field_type !== (savedField?.field_type ?? "text") ||
+    fieldDraft.required !== (savedField?.required ?? false) ||
+    fieldDraft.description !== (savedField?.description ?? "") ||
+    fieldDraft.options !== (savedField?.options.join(", ") ?? "")
+  );
+  const hasChanges =
+    (project !== null && state.project !== null && (
+      project.name !== state.project.name ||
+      project.era_name !== state.project.era_name ||
+      project.author !== state.project.author ||
+      project.description !== state.project.description
+    )) ||
+    saveMode !== state.save_mode ||
+    (saveMode === "interval" && saveInterval !== state.save_interval) ||
+    (selectedType !== undefined && (typeName !== selectedType.name || typeIcon !== selectedType.icon)) ||
+    newTypeName !== "" || hasFieldChanges;
+  useLayoutEffect(() => {
+    onDirtyChange(hasChanges);
+    return () => onDirtyChange(false);
+  }, [hasChanges, onDirtyChange]);
 
   useEffect(() => {
     if (!saveNotice) return;

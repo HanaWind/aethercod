@@ -6,6 +6,15 @@ import { useEffect, useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
 import ElasticScroll from "./ElasticScroll";
 
+const filterTransition = { duration: 0.24, ease: [0.22, 1, 0.36, 1] } as const;
+
+function parseYear(value: string) {
+  if (!value.trim()) return null;
+  if (!/^[+-]?\d+$/.test(value.trim())) return Number.NaN;
+  const year = Number(value);
+  return Number.isSafeInteger(year) ? year : Number.NaN;
+}
+
 export default function TimelineView({
   events,
   types,
@@ -20,10 +29,24 @@ export default function TimelineView({
   onRelatedGraph: (entityId: string) => void;
 }) {
   const [typeId, setTypeId] = useState("");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
   const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entityId: string } | null>(null);
-  const filtered = events.filter(
-    (event) => !typeId || event.type_id === typeId,
+  const startYear = parseYear(start);
+  const endYear = parseYear(end);
+  const invalidStart = Number.isNaN(startYear);
+  const invalidEnd = Number.isNaN(endYear);
+  const reversed = startYear !== null && endYear !== null && startYear > endYear;
+  const yearFilterError = invalidStart || invalidEnd
+    ? "请输入有效的整数年份。"
+    : reversed ? "起始年份不能晚于终止年份。" : "";
+  const hasYearFilter = startYear !== null || endYear !== null;
+  const filtered = events.filter((event) =>
+    (!typeId || event.type_id === typeId) &&
+    (!hasYearFilter || (event.year !== null && !yearFilterError &&
+      (startYear === null || event.year >= startYear) &&
+      (endYear === null || event.year <= endYear))),
   );
 
   useEffect(() => {
@@ -57,46 +80,97 @@ export default function TimelineView({
           />
         </div>
       </header>
+      <div className="timeline-year-filters" role="group" aria-label="年份筛选">
+        <label>
+          起始年份
+          <input
+            value={start}
+            onChange={(event) => setStart(event.target.value)}
+            aria-invalid={invalidStart || reversed}
+            aria-describedby={yearFilterError ? "timeline-year-error" : undefined}
+          />
+        </label>
+        <label>
+          终止年份
+          <input
+            value={end}
+            onChange={(event) => setEnd(event.target.value)}
+            aria-invalid={invalidEnd || reversed}
+            aria-describedby={yearFilterError ? "timeline-year-error" : undefined}
+          />
+        </label>
+        <button
+          type="button"
+          className="icon-button"
+          title="清空年份筛选"
+          aria-label="清空年份筛选"
+          disabled={!start && !end}
+          onClick={() => {
+            setStart("");
+            setEnd("");
+          }}
+        >
+          <X size={15} />
+        </button>
+        {yearFilterError && <span id="timeline-year-error" role="status">{yearFilterError}</span>}
+      </div>
       <ElasticScroll className="timeline-page-scroll">
-        {filtered.length ? (
-          <div className="timeline-track">
+        <div className="timeline-track">
+          <AnimatePresence initial={false}>
             {filtered.map((event) => (
-              <button
-                className="timeline-card"
+              <motion.div
+                className="timeline-motion-row"
                 key={event.id}
-                onClick={() => setSelectedEvent(event)}
-                onContextMenu={(pointerEvent) => {
-                  pointerEvent.preventDefault();
-                  setContextMenu({
-                    x: Math.max(8, Math.min(pointerEvent.clientX, window.innerWidth - 210)),
-                    y: Math.max(8, Math.min(pointerEvent.clientY, window.innerHeight - 80)),
-                    entityId: event.entity_id,
-                  });
-                }}
+                layout="position"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0, pointerEvents: "none" }}
+                transition={filterTransition}
               >
-                <span className="timeline-card-node" />
-                <span className="timeline-card-date">
-                  {formatWorldDate(event, era)}
-                </span>
-                <span className="timeline-card-copy">
-                  <strong>{event.label || event.date_kind}</strong>
-                  <small>
-                    {event.name} ·{" "}
-                    {types.find((type) => type.id === event.type_id)?.name ??
-                      "词条"}
-                  </small>
-                </span>
-                <ChevronRight size={15} />
-              </button>
+                <button
+                  className="timeline-card"
+                  onClick={() => setSelectedEvent(event)}
+                  onContextMenu={(pointerEvent) => {
+                    pointerEvent.preventDefault();
+                    setContextMenu({
+                      x: Math.max(8, Math.min(pointerEvent.clientX, window.innerWidth - 210)),
+                      y: Math.max(8, Math.min(pointerEvent.clientY, window.innerHeight - 80)),
+                      entityId: event.entity_id,
+                    });
+                  }}
+                >
+                  <span className="timeline-card-node" />
+                  <span className="timeline-card-date">
+                    {formatWorldDate(event, era)}
+                  </span>
+                  <span className="timeline-card-copy">
+                    <strong>{event.label || event.date_kind}</strong>
+                    <small>
+                      {event.name} ·{" "}
+                      {types.find((type) => type.id === event.type_id)?.name ??
+                        "词条"}
+                    </small>
+                  </span>
+                  <ChevronRight size={15} />
+                </button>
+              </motion.div>
             ))}
-          </div>
-        ) : (
-          <div className="empty-view">
-            <CalendarDays size={22} />
-            <strong>时间线尚无纪年节点</strong>
-            <span>在词条中添加日期后，事件会显示在此处。</span>
-          </div>
-        )}
+          </AnimatePresence>
+        </div>
+        <AnimatePresence initial={false}>
+          {!filtered.length && !yearFilterError && (
+            <motion.div
+              className="empty-view timeline-empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={filterTransition}
+            >
+              <CalendarDays size={22} />
+              <strong>{events.length ? "没有符合筛选条件的事件" : "时间线尚无纪年节点"}</strong>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </ElasticScroll>
       <AnimatePresence>
         {contextMenu && (
