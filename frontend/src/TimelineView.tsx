@@ -5,6 +5,7 @@ import { CalendarDays, ChevronRight, ExternalLink, Filter, Network, X } from "lu
 import { useEffect, useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
 import ElasticScroll from "./ElasticScroll";
+import { displayTypeName, translate, type Language } from "./i18n";
 
 const filterTransition = { duration: 0.24, ease: [0.22, 1, 0.36, 1] } as const;
 
@@ -19,12 +20,14 @@ export default function TimelineView({
   events,
   types,
   era,
+  language,
   onSelect,
   onRelatedGraph,
 }: {
   events: TimelineEntry[];
   types: EntityType[];
   era: string;
+  language: Language;
   onSelect: (entityId: string) => void;
   onRelatedGraph: (entityId: string) => void;
 }) {
@@ -64,25 +67,25 @@ export default function TimelineView({
     <div className="timeline-page">
       <header className="view-header">
         <div>
-          <span className="section-kicker">{era}纪年</span>
-          <h1>时间线</h1>
+          <span className="section-kicker">{era}{translate(language, "纪年")}</span>
+          <h1>{translate(language, "时间线")}</h1>
         </div>
         <div className="view-filter">
           <Filter size={14} />
           <Dropdown
-            label="筛选时间线类型"
+            label={language === "en" ? "Filter timeline by type" : "筛选时间线类型"}
             value={typeId}
             onChange={setTypeId}
             options={[
-              { value: "", label: "全部类型" },
-              ...types.map((type) => ({ value: type.id, label: type.name })),
+              { value: "", label: translate(language, "全部类型") },
+              ...types.map((type) => ({ value: type.id, label: displayTypeName(language, type) })),
             ]}
           />
         </div>
       </header>
-      <div className="timeline-year-filters" role="group" aria-label="年份筛选">
+      <div className="timeline-year-filters" role="group" aria-label={translate(language, "年份筛选")}>
         <label>
-          起始年份
+              {translate(language, "起始年份")}
           <input
             value={start}
             onChange={(event) => setStart(event.target.value)}
@@ -91,7 +94,7 @@ export default function TimelineView({
           />
         </label>
         <label>
-          终止年份
+              {translate(language, "终止年份")}
           <input
             value={end}
             onChange={(event) => setEnd(event.target.value)}
@@ -102,8 +105,8 @@ export default function TimelineView({
         <button
           type="button"
           className="icon-button"
-          title="清空年份筛选"
-          aria-label="清空年份筛选"
+              title={translate(language, "清空年份筛选")}
+              aria-label={translate(language, "清空年份筛选")}
           disabled={!start && !end}
           onClick={() => {
             setStart("");
@@ -112,7 +115,7 @@ export default function TimelineView({
         >
           <X size={15} />
         </button>
-        {yearFilterError && <span id="timeline-year-error" role="status">{yearFilterError}</span>}
+        {yearFilterError && <span id="timeline-year-error" role="status">{translate(language, yearFilterError)}</span>}
       </div>
       <ElasticScroll className="timeline-page-scroll">
         <div className="timeline-track">
@@ -147,8 +150,10 @@ export default function TimelineView({
                     <strong>{event.label || event.date_kind}</strong>
                     <small>
                       {event.name} ·{" "}
-                      {types.find((type) => type.id === event.type_id)?.name ??
-                        "词条"}
+                      {(() => {
+                        const type = types.find((item) => item.id === event.type_id);
+                        return type ? displayTypeName(language, type) : translate(language, "词条");
+                      })()}
                     </small>
                   </span>
                   <ChevronRight size={15} />
@@ -167,7 +172,7 @@ export default function TimelineView({
               transition={filterTransition}
             >
               <CalendarDays size={22} />
-              <strong>{events.length ? "没有符合筛选条件的事件" : "时间线尚无纪年节点"}</strong>
+              <strong>{translate(language, events.length ? "没有符合筛选条件的事件" : "时间线尚无纪年节点")}</strong>
             </motion.div>
           )}
         </AnimatePresence>
@@ -194,7 +199,7 @@ export default function TimelineView({
               }}
             >
               <Network size={14} />
-              关联图谱
+              {translate(language, "关联图谱")}
             </button>
           </motion.div>
         )}
@@ -212,7 +217,7 @@ export default function TimelineView({
               className="timeline-event-dialog glass-menu"
               role="dialog"
               aria-modal="true"
-              aria-label={selectedEvent.label || "时间线事件详情"}
+              aria-label={selectedEvent.label || translate(language, "时间线事件详情")}
               initial={{ opacity: 0, scale: 0.96, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 4 }}
@@ -221,12 +226,12 @@ export default function TimelineView({
             >
               <header>
                 <div>
-                  <span className="section-kicker">{era}纪年 · 事件详情</span>
+                  <span className="section-kicker">{era}{translate(language, "纪年")} · {translate(language, "事件详情")}</span>
                   <h2>{selectedEvent.label || selectedEvent.date_kind}</h2>
                 </div>
                 <button
                   className="icon-button"
-                  title="关闭"
+                  title={translate(language, "关闭")}
                   onClick={() => setSelectedEvent(null)}
                 >
                   <X size={15} />
@@ -239,12 +244,14 @@ export default function TimelineView({
                 <span>{selectedEvent.name}</span>
                 <span>·</span>
                 <span>
-                  {types.find((type) => type.id === selectedEvent.type_id)?.name ??
-                    "词条"}
+                  {(() => {
+                    const type = types.find((item) => item.id === selectedEvent.type_id);
+                    return type ? displayTypeName(language, type) : translate(language, "词条");
+                  })()}
                 </span>
               </div>
               <p className="timeline-event-description">
-                {selectedEvent.description?.trim() || "暂无事件说明"}
+                {selectedEvent.description?.trim() || translate(language, "暂无事件说明")}
               </p>
               <footer>
                 <button
@@ -256,7 +263,7 @@ export default function TimelineView({
                   }}
                 >
                   <ExternalLink size={14} />
-                  打开关联词条
+                  {translate(language, "打开关联词条")}
                 </button>
               </footer>
             </motion.section>

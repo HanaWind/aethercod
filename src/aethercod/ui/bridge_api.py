@@ -465,7 +465,13 @@ class BridgeAPI:
         data = self._entity_dict(entity)
         entity_type = service.taxonomy.get(entity.type_id)
         data["type"] = asdict(entity_type) if entity_type else None
-        data["fields"] = [asdict(item) for item in self._fields_for_ui(entity.type_id)]
+        data["fields"] = [
+            {
+                **asdict(item),
+                "protected": is_builtin_field(item.id, item.type_id, item.name),
+            }
+            for item in self._fields_for_ui(entity.type_id)
+        ]
         data["relations"] = service.relation_rows(entity.id)
         data["backlinks"] = self._backlinks(entity.id)
         return data
@@ -528,7 +534,13 @@ class BridgeAPI:
         return {
             **self._entity_dict(entity),
             "type": asdict(service.taxonomy.get(entity.type_id)),
-            "fields": [asdict(field) for field in definitions],
+            "fields": [
+                {
+                    **asdict(field),
+                    "protected": is_builtin_field(field.id, field.type_id, field.name),
+                }
+                for field in definitions
+            ],
         }
 
     @_serialized

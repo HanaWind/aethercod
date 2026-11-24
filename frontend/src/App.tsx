@@ -62,6 +62,7 @@ import ElasticScroll from "./ElasticScroll";
 import { propertyLayout } from "./propertyLayout";
 import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
 import brandMark from "../../src/aethercod/resources/aethercod-mark.svg";
+import { displayFieldName, displayFieldValue, displayTypeName, translate, type Language } from "./i18n";
 
 const TYPE_ICONS: Record<string, typeof UserRound> = {
   person: UserRound,
@@ -81,6 +82,9 @@ function TypeIcon({ type, size = 15 }: { type: EntityType; size?: number }) {
 }
 
 function App() {
+  const [language, setLanguage] = useState<Language>(() =>
+    localStorage.getItem("aethercod-language") === "en" ? "en" : "zh",
+  );
   const [particlesEnabled, setParticlesEnabled] = useState(
     () => localStorage.getItem("aethercod-particles") !== "off",
   );
@@ -102,6 +106,11 @@ function App() {
           motionEnabled={motionEnabled}
           particlesEnabled={particlesEnabled}
           transitionsEnabled={transitionsEnabled}
+          language={language}
+          onLanguageChange={(next) => {
+            localStorage.setItem("aethercod-language", next);
+            setLanguage(next);
+          }}
           onParticlesChange={(enabled) => {
             localStorage.setItem("aethercod-particles", enabled ? "on" : "off");
             setParticlesEnabled(enabled);
@@ -120,12 +129,16 @@ function Workspace({
   motionEnabled,
   particlesEnabled,
   transitionsEnabled,
+  language,
+  onLanguageChange,
   onParticlesChange,
   onTransitionsChange,
 }: {
   motionEnabled: boolean;
   particlesEnabled: boolean;
   transitionsEnabled: boolean;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
   onParticlesChange: (enabled: boolean) => void;
   onTransitionsChange: (enabled: boolean) => void;
 }) {
@@ -430,11 +443,11 @@ function Workspace({
       // Commit controls that stage their value on blur before inspecting the drafts.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       if ((pendingDrafts.current.size > 0 || settingsDirty.current) && (await actionDialog({
-        title: "是否丢弃修改？",
+        title: translate(language, "是否丢弃修改？"),
         message: target === "project"
-          ? "当前资料库有未保存的修改。关闭资料库会丢弃这些修改。"
-          : "当前资料库有未保存的修改。退出程序会丢弃这些修改。",
-        confirmLabel: "放弃修改并关闭",
+          ? translate(language, "当前资料库有未保存的修改。关闭资料库会丢弃这些修改。")
+          : translate(language, "当前资料库有未保存的修改。退出程序会丢弃这些修改。"),
+        confirmLabel: translate(language, "放弃修改并关闭"),
         danger: true,
       })) === null) return;
 
@@ -453,7 +466,7 @@ function Workspace({
         setClosing(false);
       }
     }
-  }, [actionDialog, syncState]);
+  }, [actionDialog, language, syncState]);
 
   useLayoutEffect(() => {
     const closeWindow = () => void requestClose("window");
@@ -464,10 +477,10 @@ function Workspace({
   const showStatusToast = useCallback(
     (message: string, kind: "success" | "error") => {
       window.clearTimeout(statusToastTimer.current);
-      setStatusToast({ message, kind, key: Date.now() });
+      setStatusToast({ message: translate(language, message), kind, key: Date.now() });
       statusToastTimer.current = window.setTimeout(() => setStatusToast(null), 3000);
     },
-    [],
+    [language],
   );
 
   const manualSave = useCallback(async () => {
@@ -605,9 +618,9 @@ function Workspace({
     const type = state.types.find((item) => item.id === typeId);
     if (!type || type.is_builtin) return;
     const name = await actionDialog({
-      title: "类型名称",
+      title: translate(language, "类型名称"),
       initialValue: type.name,
-      confirmLabel: "重命名",
+      confirmLabel: translate(language, "重命名"),
     });
     if (!name || name === type.name) return;
     try {
@@ -658,9 +671,9 @@ function Workspace({
       !type ||
       type.is_builtin ||
       (await actionDialog({
-        title: "删除类型",
-        message: `删除“${type.name}”？`,
-        confirmLabel: "删除",
+        title: translate(language, "删除类型"),
+        message: `${translate(language, "删除类型确认前缀")}${displayTypeName(language, type)}${translate(language, "删除类型确认后缀")}`,
+        confirmLabel: translate(language, "删除"),
         danger: true,
       })) === null
     )
@@ -679,9 +692,9 @@ function Workspace({
     const entity = await desktopApi()?.get_entity(entityId);
     if (!entity) return;
     const name = await actionDialog({
-      title: "词条名称",
+      title: translate(language, "词条名称"),
       initialValue: entity.name,
-      confirmLabel: "重命名",
+      confirmLabel: translate(language, "重命名"),
     });
     if (!name || name === entity.name) return;
     try {
@@ -861,11 +874,7 @@ function Workspace({
   };
 
   const promptForProject = () =>
-    void actionDialog({
-      title: "需要打开资料库",
-      message: "请先新建或打开一个资料库后再访问此功能。",
-      confirmLabel: "知道了",
-    });
+    showStatusToast(translate(language, "请先打开或新建资料库"), "error");
 
   const switchTheme = () => {
     const shell = document.querySelector(".app-shell");
@@ -907,7 +916,7 @@ function Workspace({
           (entity.custom_fields[field.name] === undefined ||
             entity.custom_fields[field.name] === ""),
       );
-      if (missingRequired) {
+    if (missingRequired) {
         const version = ++revisionRef.current;
         setRevision(version);
         pendingDrafts.current.set(entity.id, { entity, version });
@@ -916,7 +925,7 @@ function Workspace({
         setActiveView("entries");
         setTimeline([]);
         setDirty(true);
-        setError("请填写必填属性后保存词条");
+        setError(translate(language, "请填写必填属性后保存词条"));
       } else {
         const version = ++revisionRef.current;
         setRevision(version);
@@ -938,7 +947,7 @@ function Workspace({
     if (!Number.isInteger(year)) return;
     const date: EntityDate = {
       date_kind: "custom",
-      label: newDate.label.trim() || "历史节点",
+      label: newDate.label.trim() || translate(language, "历史节点"),
       description: newDate.description.trim(),
       year,
       date_value: newDate.date_value,
@@ -980,9 +989,9 @@ function Workspace({
     if (
       !relation ||
       (await actionDialog({
-        title: "删除关联",
-        message: `删除与“${relation.other_name}”之间的关联？`,
-        confirmLabel: "删除关联",
+        title: translate(language, "删除关联"),
+        message: `${translate(language, "删除关联确认")}${relation.other_name}?`,
+        confirmLabel: translate(language, "删除关联"),
         danger: true,
       })) === null
     )
@@ -1000,9 +1009,9 @@ function Workspace({
     if (
       !state.writable ||
       (await actionDialog({
-        title: "永久删除词条",
-        message: `永久删除“${entityName}”及其全部关联数据？此操作无法撤销。`,
-        confirmLabel: "永久删除",
+        title: translate(language, "永久删除词条"),
+        message: `${translate(language, "永久删除确认前缀")}${entityName}${translate(language, "永久删除确认后缀")}`,
+        confirmLabel: translate(language, "永久删除"),
         danger: true,
       })) === null
     )
@@ -1057,9 +1066,9 @@ function Workspace({
       !state.writable ||
       !(await flushDraft()) ||
       (await actionDialog({
-        title: "永久删除词条",
-        message: `永久删除“${name}”及其全部关联数据？此操作无法撤销。`,
-        confirmLabel: "永久删除",
+        title: translate(language, "永久删除词条"),
+        message: `${translate(language, "永久删除确认前缀")}${name}${translate(language, "永久删除确认后缀")}`,
+        confirmLabel: translate(language, "永久删除"),
         danger: true,
       })) === null
     )
@@ -1093,6 +1102,7 @@ function Workspace({
       key={field.id}
       field={field}
       value={draft?.custom_fields[field.name]}
+      language={language}
       disabled={!state.writable}
       entities={state.entities}
       onIssue={showIssueToast}
@@ -1132,65 +1142,65 @@ function Workspace({
           {state.project && (
             <div className={`save-indicator ${saving ? "is-saving" : ""}`}>
               <span />
-              {saving ? "正在同步" : dirty ? "尚未保存" : "已同步至本地库"}
+              {translate(language, saving ? "正在同步" : dirty ? "尚未保存" : "已同步至本地库")}
             </div>
           )}
           {state.project && state.writable && (
             <button
               className="topbar-save"
               disabled={!dirty || saving || closing}
-              title="保存所有未保存修改（Ctrl+S）"
+              title={language === "en" ? "Save all changes (Ctrl+S)" : "保存所有未保存修改（Ctrl+S）"}
               onClick={() => void manualSave()}
             >
               <Save size={13} />
-              保存
+              {translate(language, "保存")}
             </button>
           )}
           {state.project && (
             <button
               className="close-library-pill"
-              title="关闭当前资料库"
+              title={translate(language, "关闭资料库")}
               onClick={() => void requestClose("project")}
             >
               <FolderOpen size={13} />
-              <span>关闭资料库</span>
+              <span>{translate(language, "关闭资料库")}</span>
             </button>
           )}
           {state.project && (
             <button
               className={`readonly-toggle ${state.read_only ? "active" : ""}`}
-              title={state.read_only ? "关闭只读模式" : "开启只读模式"}
+              title={state.read_only ? "Edit mode" : "Read-only mode"}
               onClick={() => void toggleReadOnly()}
             >
               <LockKeyhole size={14} />
-              <span>{state.read_only ? "只读模式" : "编辑模式"}</span>
+              <span>{translate(language, state.read_only ? "只读模式" : "编辑模式")}</span>
             </button>
           )}
           <button
             className="icon-button theme-toggle"
-            title={theme === "light" ? "切换到深色主题" : "切换到浅色主题"}
+              title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
             onClick={switchTheme}
           >
             {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
           </button>
           <button
             className="icon-button window-control"
-            title="最小化"
+            title={translate(language, "最小化")}
             onClick={() => void changeWindow("minimize")}
           >
             <Minus size={16} aria-hidden="true" />
           </button>
           <button
             className="icon-button window-control"
-            title={windowMaximized ? "还原窗口" : "最大化窗口"}
-            aria-label={windowMaximized ? "还原窗口" : "最大化窗口"}
+            title={translate(language, windowMaximized ? "还原窗口" : "最大化窗口")}
+            aria-label={translate(language, windowMaximized ? "还原窗口" : "最大化窗口")}
             onClick={() => void changeWindow("maximize")}
           >
             {windowMaximized ? <Copy size={13} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />}
           </button>
           <button
             className="icon-button window-control close-control"
-            title="关闭"
+            title={translate(language, "关闭")}
             onClick={() => void requestClose("window")}
           >
             <X size={15} />
@@ -1212,7 +1222,7 @@ function Workspace({
                 <button
                   className="library-selector"
                   onClick={(event) => openContextMenu(event, "library", "")}
-                  title="资料库菜单"
+                  title={translate(language, "资料库菜单")}
                   aria-haspopup="menu"
                   aria-expanded={contextMenu?.kind === "library"}
                 >
@@ -1220,8 +1230,8 @@ function Workspace({
                     <BookOpen size={16} />
                   </div>
                   <div className="library-copy">
-                    <span className="muted-label">当前资料库</span>
-                    <strong>{state.project?.name ?? "选择资料库"}</strong>
+                    <span className="muted-label">{translate(language, "当前资料库")}</span>
+                    <strong>{state.project?.name ?? translate(language, "资料库")}</strong>
                   </div>
                   <ChevronDown size={15} className="quiet-icon" />
                 </button>
@@ -1233,7 +1243,7 @@ function Workspace({
                   }}
                 >
                   <Search size={15} />
-                  <span className="sidebar-action-label">搜索词条</span>
+                    <span className="sidebar-action-label">{translate(language, "搜索词条")}</span>
                   <kbd>
                     <Command size={11} /> K
                   </kbd>
@@ -1244,14 +1254,14 @@ function Workspace({
                     onClick={() => void openProject()}
                   >
                     <FolderOpen size={14} />
-                    <span className="sidebar-action-label">打开资料库</span>
+                    <span className="sidebar-action-label">{translate(language, "打开资料库")}</span>
                   </button>
                   <button
                     className="subtle-action"
                     onClick={() => setCreateOpen(true)}
                   >
                     <FilePlus2 size={14} />
-                    <span className="sidebar-action-label">新建</span>
+                    <span className="sidebar-action-label">{translate(language, "新建资料库")}</span>
                   </button>
                   <button
                     className="subtle-action workspace-settings-action"
@@ -1266,16 +1276,16 @@ function Workspace({
                     }}
                   >
                     <Settings2 size={14} />
-                    <span className="sidebar-action-label">设置</span>
+                    <span className="sidebar-action-label">{translate(language, "设置")}</span>
                   </button>
                 </div>
-                <nav className="workspace-nav" aria-label="工作区">
+                <nav className="workspace-nav" aria-label={translate(language, "工作区")}>
                   <button
                     className={activeView === "entries" ? "active" : ""}
                     onClick={() => void navigateTo("entries")}
                   >
                     <BookOpen size={15} />
-                    <span className="sidebar-action-label">词条</span>
+                    <span className="sidebar-action-label">{translate(language, "词条")}</span>
                   </button>
                   <button
                     className={activeView === "timeline" ? "active" : ""}
@@ -1287,7 +1297,7 @@ function Workspace({
                     }
                   >
                     <CalendarDays size={15} />
-                    <span className="sidebar-action-label">时间线</span>
+                    <span className="sidebar-action-label">{translate(language, "时间线")}</span>
                   </button>
                   <button
                     className={activeView === "graph" ? "active" : ""}
@@ -1300,7 +1310,7 @@ function Workspace({
                     }}
                   >
                     <Network size={15} />
-                    <span className="sidebar-action-label">关系网</span>
+                    <span className="sidebar-action-label">{translate(language, "关系网")}</span>
                   </button>
                   <button
                     className={activeView === "favorites" ? "active" : ""}
@@ -1312,18 +1322,18 @@ function Workspace({
                     }
                   >
                     <Star size={15} />
-                    <span className="sidebar-action-label">收藏夹</span>
+                    <span className="sidebar-action-label">{translate(language, "收藏夹")}</span>
                   </button>
                 </nav>
               </div>
 
               <div className="sidebar-section-heading">
-                <span>词条分类</span>
+                <span>{language === "en" ? "Entry Types" : "词条分类"}</span>
                 <div className="category-actions">
                   {state.project && (
                     <button
                       className="icon-button compact"
-                      title="新建词条类型"
+                    title={translate(language, "新建词条类型")}
                       disabled={!state.writable}
                       onClick={() => void createType()}
                     >
@@ -1332,7 +1342,7 @@ function Workspace({
                   )}
                   <button
                     className="icon-button compact"
-                    title="显示全部词条"
+                    title={translate(language, "显示全部词条")}
                     onClick={() => {
                       setActiveTypeId("");
                       setOpenTypeIds(
@@ -1371,7 +1381,7 @@ function Workspace({
                             }
                           >
                             <TypeIcon type={type} size={14} />
-                            <span className="sidebar-action-label">{type.name}</span>
+                            <span className="sidebar-action-label">{displayTypeName(language, type)}</span>
                             <span className="type-count">
                               {
                                 state.entities.filter(
@@ -1387,14 +1397,14 @@ function Workspace({
                           <button
                             className="add-type-entry"
                             disabled={!state.writable}
-                            title={`新建${type.name}`}
+                          title={`${translate(language, "新建")}${displayTypeName(language, type)}`}
                             onClick={() => void createEntity(type)}
                           >
                             <Plus size={14} />
                           </button>
                           <button
                             className="type-more-button"
-                            title={`${type.name}选项`}
+                            title={`${displayTypeName(language, type)} ${translate(language, "选项")}`}
                             onClick={(event) =>
                               openContextMenu(event, "type", type.id)
                             }
@@ -1460,7 +1470,7 @@ function Workspace({
                                     </span>
                                     <span
                                       className="entry-more-button"
-                                      title={`${entity.name}选项`}
+                                      title={`${entity.name} ${translate(language, "选项")}`}
                                       onClick={(event) =>
                                         openContextMenu(
                                           event,
@@ -1482,7 +1492,7 @@ function Workspace({
                 </LayoutGroup>
                 {!state.types.length && (
                   <div className="sidebar-empty">
-                    打开或创建资料库以浏览词条
+                    {translate(language, "打开或新建资料库以浏览词条")}
                   </div>
                 )}
               </ElasticScroll>
@@ -1490,8 +1500,8 @@ function Workspace({
               <div className="sidebar-bottom">
                 <div className="library-count">
                   <span className="status-square" />
-                  {state.entities.length} 个词条
-                  <span className="bottom-separator">·</span>本地数据库
+                  {state.entities.length} {translate(language, "词条")}
+                <span className="bottom-separator">·</span>{translate(language, "本地数据库")}
                 </div>
                 <div className="profile-row">
                   <div className="profile-avatar">
@@ -1500,7 +1510,7 @@ function Workspace({
                   <div className="profile-copy">
                     <strong>{state.project?.author || "Aethercod"}</strong>
                     <span>
-                      {state.project ? state.project.era_name : "个人工作区"}
+                      {state.project ? state.project.era_name : translate(language, "个人工作区")}
                     </span>
                   </div>
                 </div>
@@ -1514,7 +1524,7 @@ function Workspace({
             <div className="breadcrumb">
               <button
                 className="icon-button"
-                title={sidebarOpen ? "收起侧栏" : "展开侧栏"}
+                title={translate(language, sidebarOpen ? "收起侧栏" : "展开侧栏")}
                 onClick={() => setSidebarOpen((open) => !open)}
               >
                 {sidebarOpen ? (
@@ -1523,17 +1533,17 @@ function Workspace({
                   <ChevronRight size={16} />
                 )}
               </button>
-              <span className="crumb-muted">
-                {activeView === "timeline"
-                  ? "时间线"
-                  : activeView === "graph"
-                    ? (relatedGraphId ? "关联图谱" : "关系网")
-                    : activeView === "favorites"
-                      ? "收藏夹"
-                    : activeView === "settings"
-                      ? "资料库设置"
-                      : (draft?.type?.name ?? "典籍")}
-              </span>
+                    <span className="crumb-muted">
+                      {activeView === "timeline"
+                        ? translate(language, "时间线")
+                        : activeView === "graph"
+                          ? translate(language, relatedGraphId ? "关联图谱" : "关系网")
+                          : activeView === "favorites"
+                            ? translate(language, "收藏夹")
+                            : activeView === "settings"
+                              ? translate(language, "资料库设置")
+                              : (draft?.type ? displayTypeName(language, draft.type) : (language === "en" ? "Library" : "典籍"))}
+                    </span>
               {activeView === "entries" && draft && (
                 <>
                   <ChevronRight size={13} className="quiet-icon" />
@@ -1548,7 +1558,7 @@ function Workspace({
                 state.writable && (
                   <button
                     className="icon-button"
-                    title="删除词条"
+                    title={translate(language, "删除词条")}
                     onClick={() => void deleteEntity()}
                   >
                     <Trash2 size={15} />
@@ -1557,7 +1567,7 @@ function Workspace({
               {activeView === "entries" && draft && (
                 <button
                   className="icon-button"
-                  title="查看全库时间线"
+                  title={translate(language, "查看全库时间线")}
                   onClick={() => void navigateTo("timeline")}
                 >
                   <CalendarDays size={15} />
@@ -1566,7 +1576,7 @@ function Workspace({
               {activeView === "entries" && draft && (
                 <motion.button
                   className={`favorite-toggle ${draft.is_favorite ? "active" : ""}`}
-                  title={draft.is_favorite ? "取消收藏（Ctrl+D）" : "加入收藏（Ctrl+D）"}
+                  title={translate(language, draft.is_favorite ? "取消收藏（Ctrl+D）" : "加入收藏（Ctrl+D）")}
                   aria-label={draft.is_favorite ? "取消收藏" : "加入收藏"}
                   aria-pressed={Boolean(draft.is_favorite)}
                   disabled={!state.writable}
@@ -1580,7 +1590,7 @@ function Workspace({
               {activeView === "entries" && draft && (
                 <button
                   className={`toolbar-text-action ${compactWindow ? "compact" : ""}`}
-                  title="查看当前词条及其直接关联图谱"
+                  title={translate(language, "查看当前词条及其直接关联图谱")}
                   onClick={() => {
                     if (state.entities.some((entity) => entity.id === draft.id)) {
                       openRelatedGraph(draft.id);
@@ -1592,13 +1602,13 @@ function Workspace({
                   }}
                 >
                   <Network size={14} />
-                  {!compactWindow && <span>关联图谱</span>}
+                  {!compactWindow && <span>{translate(language, "关联图谱")}</span>}
                 </button>
               )}
               {activeView === "entries" && (
                 <button
                   className="icon-button"
-                  title={inspectorOpen ? "收起检视栏" : "展开检视栏"}
+                  title={translate(language, inspectorOpen ? "收起检视栏" : "展开检视栏")}
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
                   {inspectorOpen ? (
@@ -1615,7 +1625,7 @@ function Workspace({
             <div className="error-banner">
               <CircleHelp size={15} />
               <span>{error}</span>
-              <button title="关闭提示" onClick={() => setError("")}>
+              <button title={translate(language, "关闭提示")} onClick={() => setError("")}>
                 <X size={14} />
               </button>
             </div>
@@ -1630,6 +1640,8 @@ function Workspace({
               onProjectUpdated={syncState}
               onChanged={refreshProject}
               onDirtyChange={onSettingsDirtyChange}
+              language={language}
+              onLanguageChange={onLanguageChange}
               onError={reportError}
               particlesEnabled={particlesEnabled}
               transitionsEnabled={transitionsEnabled}
@@ -1641,6 +1653,7 @@ function Workspace({
               events={globalTimeline}
               types={state.types}
               era={state.project.era_name}
+              language={language}
               onSelect={selectById}
               onRelatedGraph={openRelatedGraph}
             />
@@ -1672,8 +1685,8 @@ function Workspace({
               <section className="favorites-page">
                 <header className="view-header">
                   <div>
-                    <span className="section-kicker">已收藏的设定</span>
-                    <h1>收藏夹</h1>
+                    <span className="section-kicker">{translate(language, "已收藏的设定")}</span>
+                    <h1>{translate(language, "收藏夹")}</h1>
                   </div>
                   <span className="heading-count">
                     {state.entities.filter((entity) => entity.is_favorite).length}
@@ -1689,7 +1702,7 @@ function Workspace({
                       <span className="entity-dot" style={{ background: entity.color }} />
                       <span className="favorite-row-copy">
                         <strong>{entity.name}</strong>
-                        <small>{entity.summary || typeById(entity.type_id)?.name}</small>
+                        <small>{entity.summary || (typeById(entity.type_id) ? displayTypeName(language, typeById(entity.type_id)!) : "")}</small>
                       </span>
                       <Star size={15} fill="currentColor" />
                       <ChevronRight size={14} />
@@ -1699,7 +1712,7 @@ function Workspace({
                 {!state.entities.some((entity) => entity.is_favorite) && (
                   <div className="empty-view favorites-empty">
                     <Star size={22} />
-                    <strong>收藏夹为空</strong>
+                    <strong>{translate(language, "收藏夹为空")}</strong>
                   </div>
                 )}
               </section>
@@ -1709,22 +1722,22 @@ function Workspace({
               <div className="welcome-glyph">
                 <Sparkles size={25} />
               </div>
-              <h1>打开一卷世界</h1>
-              <p>从本地资料库继续构建你的世界观。</p>
+              <h1>{translate(language, "打开一卷世界")}</h1>
+              <p>{language === "en" ? "Continue building your world in a local library." : "从本地资料库继续构建你的世界观。"}</p>
               <div className="welcome-actions">
                 <button
                   className="primary-button"
                   onClick={() => void openProject()}
                 >
                   <FolderOpen size={16} />
-                  打开资料库
+                  {translate(language, "打开资料库")}
                 </button>
                 <button
                   className="secondary-button"
                   onClick={() => setCreateOpen(true)}
                 >
                   <Plus size={16} />
-                  创建资料库
+                  {translate(language, "新建资料库")}
                 </button>
               </div>
             </section>
@@ -1733,8 +1746,8 @@ function Workspace({
               <div className="welcome-glyph">
                 <BookOpen size={23} />
               </div>
-              <h1>选择一个词条</h1>
-              <p>从左侧分类中打开一条设定，或创建新词条。</p>
+              <h1>{translate(language, "选择一个词条")}</h1>
+              <p>{translate(language, "从左侧分类中打开一条设定，或创建新词条。")}</p>
             </section>
           ) : (
             <ElasticScroll className="document-scroll">
@@ -1775,16 +1788,16 @@ function Workspace({
                           }
                           size={13}
                         />
-                        {draft.type?.name}
+                        {draft.type ? displayTypeName(language, draft.type) : ""}
                       </span>
                       <span className="eyebrow-dot">·</span>
                       {categoryEditing && state.writable ? (
                         <input
                           className="category-input"
                           autoFocus
-                          aria-label="词条分类"
+                          aria-label={translate(language, "词条分类")}
                           value={categoryDraft}
-                          placeholder="添加分类"
+                          placeholder={translate(language, "添加分类")}
                           onChange={(event) =>
                             setCategoryDraft(event.target.value)
                           }
@@ -1809,7 +1822,7 @@ function Workspace({
                       ) : (
                         <button
                           className={`category-label ${draft.tags.length ? "" : "empty"}`}
-                          title={state.writable ? "编辑分类" : "词条分类"}
+                          title={translate(language, state.writable ? "编辑分类" : "词条分类")}
                           onClick={() => {
                             if (!state.writable) return;
                             setCategoryDraft(draft.tags.join("，"));
@@ -1817,15 +1830,16 @@ function Workspace({
                           }}
                         >
                           {draft.tags.join(" · ") ||
-                            (state.writable ? "+ 添加分类" : "尚未设置分类")}
+                            (state.writable ? translate(language, "添加分类") : translate(language, "尚未设置分类"))}
                         </button>
                       )}
                     </div>
                     <EditableText
                       key={`${draft.id}-name`}
+                      language={language}
                       kind="title"
                       value={draft.name}
-                      placeholder="词条名称"
+                      placeholder={translate(language, "词条名称")}
                       disabled={!state.writable}
                       onChange={(value) =>
                         updateDraft((current) => ({ ...current, name: value }))
@@ -1833,9 +1847,10 @@ function Workspace({
                     />
                     <EditableText
                       key={`${draft.id}-summary`}
+                      language={language}
                       kind="summary"
                       value={draft.summary}
-                      placeholder="为这个词条写一段简短摘要"
+                      placeholder={translate(language, "添加词条摘要")}
                       disabled={!state.writable}
                       onChange={(value) =>
                         updateDraft((current) => ({
@@ -1849,20 +1864,20 @@ function Workspace({
 
                     {!properties?.aliasesInGrid && (
                       <label className="metadata-line">
-                        <span>别名</span>
-                        <AliasInput aliases={draft.aliases} disabled={!state.writable} onChange={updateAliases} />
+                        <span>{translate(language, "别名")}</span>
+                        <AliasInput aliases={draft.aliases} disabled={!state.writable} language={language} onChange={updateAliases} />
                       </label>
                     )}
                     {properties && (properties.aliasesInGrid || properties.fields.length > 0) && (
                       <section className="document-section properties-section">
                         <div className="section-heading">
                           <div>
-                            <span className="section-kicker">结构化资料</span>
-                            <h2>属性</h2>
+                            <span className="section-kicker">{translate(language, "结构化资料")}</span>
+                            <h2>{translate(language, "属性")}</h2>
                           </div>
                           <button
                             className="icon-button compact"
-                            title={propertiesOpen ? "折叠属性" : "展开属性"}
+                            title={translate(language, propertiesOpen ? "折叠属性" : "展开属性")}
                             onClick={() => setPropertiesOpen((open) => !open)}
                           >
                             <ChevronDown size={15} />
@@ -1883,14 +1898,14 @@ function Workspace({
                             >
                               {properties.aliasesInGrid && (
                                 <label className="property-cell">
-                                  <span>别名</span>
-                                  <AliasInput aliases={draft.aliases} disabled={!state.writable} onChange={updateAliases} />
+                                  <span>{translate(language, "别名")}</span>
+                                  <AliasInput aliases={draft.aliases} disabled={!state.writable} language={language} onChange={updateAliases} />
                                 </label>
                               )}
                               {properties.fields.map(renderProperty)}
                               {properties.additional.length > 0 && (
                                 <details className="additional-properties">
-                                  <summary>其他属性</summary>
+                                  <summary>{translate(language, "其他属性")}</summary>
                                   <div className="property-grid">
                                     {properties.additional.map(renderProperty)}
                                   </div>
@@ -1905,16 +1920,17 @@ function Workspace({
                     <section className="document-section prose-section">
                       <div className="section-heading">
                         <div>
-                          <span className="section-kicker">世界设定</span>
-                          <h2>正文</h2>
+                            <span className="section-kicker">{translate(language, "世界设定")}</span>
+                            <h2>{translate(language, "正文")}</h2>
                         </div>
                         <span className="markdown-label">MARKDOWN</span>
                       </div>
                       <EditableText
                         key={`${draft.id}-notes`}
+                        language={language}
                         kind="notes"
                         value={draft.notes}
-                        placeholder="在这里书写这个词条的故事…… 支持 Markdown 与 [[词条引用]]。"
+                        placeholder={translate(language, "在这里书写这个词条的故事…… 支持 Markdown 与 [[词条引用]]。")}
                         disabled={!state.writable}
                         onChange={(value) =>
                           updateDraft((current) => ({
@@ -1935,9 +1951,9 @@ function Workspace({
                       <section className="document-section relation-section">
                         <div className="section-heading">
                           <div>
-                            <span className="section-kicker">相互连接</span>
+                      <span className="section-kicker">{translate(language, "相互连接")}</span>
                             <h2>
-                              关联词条{" "}
+                              {translate(language, "关联词条")} {" "}
                               <span className="heading-count">
                                 {draft.relations?.length ?? 0}
                               </span>
@@ -1945,7 +1961,7 @@ function Workspace({
                           </div>
                           <button
                             className="icon-button compact"
-                            title="添加关联"
+                            title={translate(language, "添加关联")}
                             disabled={!state.writable}
                             onClick={() => setShowRelationForm((open) => !open)}
                           >
@@ -1983,15 +1999,14 @@ function Workspace({
                                   <strong>{relation.other_name}</strong>
                                   <small>
                                     {target?.summary ||
-                                      targetType?.name ||
-                                      "词条"}
+                                      (targetType ? displayTypeName(language, targetType) : translate(language, "词条"))}
                                   </small>
                                 </span>
                                 {state.writable && (
                                   <span
                                     className="pill-remove"
                                     role="button"
-                                    title="删除关联"
+                                    title={translate(language, "删除关联")}
                                     onClick={(event) => {
                                       event.stopPropagation();
                                       void removeRelation(relation.id);
@@ -2004,7 +2019,7 @@ function Workspace({
                             );
                           })}
                           {!draft.relations?.length && (
-                            <span className="empty-inline">尚无关联</span>
+                            <span className="empty-inline">{translate(language, "尚无关联")}</span>
                           )}
                         </div>
                         <AnimatePresence initial={false}>
@@ -2017,8 +2032,8 @@ function Workspace({
                               exit={{ opacity: 0, height: 0 }}
                             >
                               <Dropdown
-                                label="关联词条"
-                                placeholder="选择关联词条"
+                                label={translate(language, "关联词条")}
+                                placeholder={translate(language, "选择关联词条")}
                                 value={relationValues.target_id}
                                 options={state.entities
                                   .filter((entity) => entity.id !== draft.id)
@@ -2043,7 +2058,7 @@ function Workspace({
                                       label: event.target.value,
                                     }))
                                   }
-                                  placeholder="关系名称"
+                                  placeholder={translate(language, "关系名称")}
                                   required
                                   disabled={!state.writable}
                                 />
@@ -2055,7 +2070,7 @@ function Workspace({
                                       reverse_label: event.target.value,
                                     }))
                                   }
-                                  placeholder="反向名称"
+                                  placeholder={translate(language, "反向名称")}
                                   disabled={!state.writable}
                                 />
                               </div>
@@ -2069,7 +2084,7 @@ function Workspace({
                                   )
                                 }
                               >
-                                保存关联
+                                {translate(language, "保存关联")}
                               </button>
                             </motion.form>
                           )}
@@ -2083,7 +2098,7 @@ function Workspace({
                               纪年法 · {state.project.era_name}
                             </span>
                             <h2>
-                              时间线{" "}
+                              {translate(language, "时间线")} {" "}
                               <span className="heading-count">
                                 {draft.dates.length}
                               </span>
@@ -2096,9 +2111,9 @@ function Workspace({
                               <span className="timeline-node" />
                               <div className="timeline-date-edit-grid">
                                 <input
-                                  aria-label="事件名称"
+                                  aria-label={translate(language, "事件名称")}
                                   value={date.label ?? ""}
-                                  placeholder="事件名称"
+                                  placeholder={translate(language, "事件名称")}
                                   disabled={!state.writable}
                                   onChange={(event) =>
                                     updateDraft((current) => ({
@@ -2113,6 +2128,7 @@ function Workspace({
                                 />
                                 <DatePrecisionEditor
                                   value={date}
+                                  language={language}
                                   disabled={!state.writable}
                                   onIssue={showIssueToast}
                                   onChange={(value) =>
@@ -2127,7 +2143,7 @@ function Workspace({
                                 {state.writable && (
                                   <button
                                     className="icon-button compact"
-                                    title="删除时间节点"
+                                    title={translate(language, "删除时间节点")}
                                     onClick={() =>
                                       updateDraft((current) => ({
                                         ...current,
@@ -2142,9 +2158,9 @@ function Workspace({
                                 )}
                                 <textarea
                                   className="timeline-description-input"
-                                  aria-label="事件具体说明"
+                                  aria-label={translate(language, "事件具体说明")}
                                   value={date.description ?? ""}
-                                  placeholder="事件具体说明"
+                                  placeholder={translate(language, "事件具体说明")}
                                   rows={2}
                                   disabled={!state.writable}
                                   onChange={(event) =>
@@ -2162,7 +2178,7 @@ function Workspace({
                             </div>
                           ))}
                           {!draft.dates.length && (
-                            <span className="empty-inline">暂无纪年节点</span>
+                            <span className="empty-inline">{translate(language, "暂无纪年节点")}</span>
                           )}
                         </div>
                         {state.writable && (
@@ -2175,7 +2191,7 @@ function Workspace({
                                   label: event.target.value,
                                 }))
                               }
-                              placeholder="节点名称"
+                              placeholder={translate(language, "节点名称")}
                             />
                             <DatePrecisionEditor
                               value={{
@@ -2183,6 +2199,7 @@ function Workspace({
                                 date_value: newDate.date_value,
                                 precision: newDate.precision,
                               }}
+                              language={language}
                               disabled={!state.writable}
                               onIssue={showIssueToast}
                               onChange={(value) =>
@@ -2196,7 +2213,7 @@ function Workspace({
                             />
                             <textarea
                               className="new-date-description"
-                              aria-label="事件具体说明"
+                              aria-label={translate(language, "事件具体说明")}
                               value={newDate.description}
                               onChange={(event) =>
                                 setNewDate((value) => ({
@@ -2204,12 +2221,12 @@ function Workspace({
                                   description: event.target.value,
                                 }))
                               }
-                              placeholder="事件具体说明"
+                              placeholder={translate(language, "事件具体说明")}
                               rows={2}
                             />
                             <button
                               className="icon-button compact"
-                              title="添加时间节点"
+                              title={translate(language, "添加时间节点")}
                               disabled={!state.writable}
                               onClick={addDate}
                             >
@@ -2224,8 +2241,8 @@ function Workspace({
                       <span>
                         UUID <code>{formatUuid(draft.id)}</code>
                       </span>
-                      <span>创建于 {formatDate(draft.created_at)}</span>
-                      <span>更新于 {formatDate(draft.updated_at)}</span>
+                      <span>{translate(language, "创建于")} {formatDate(draft.created_at)}</span>
+                      <span>{translate(language, "更新于")} {formatDate(draft.updated_at)}</span>
                     </footer>
                   </motion.div>
                 </motion.article>
@@ -2247,10 +2264,10 @@ function Workspace({
                 transition={{ type: "spring", stiffness: 340, damping: 38 }}
               >
                 <div className="inspector-header">
-                  <span>检视器</span>
+                    <span>{translate(language, "检视器")}</span>
                   <button
                     className="icon-button compact"
-                    title="关闭检视栏"
+                    title={translate(language, "关闭检视栏")}
                     onClick={() => setInspectorOpen(false)}
                   >
                     <X size={14} />
@@ -2259,7 +2276,7 @@ function Workspace({
                 <section className="inspector-section">
                   <div className="inspector-heading">
                     <Link2 size={14} />
-                    <span>反向引用</span>
+                    <span>{translate(language, "反向引用")}</span>
                     <span className="count-badge">
                       {draft.backlinks?.length ?? 0}
                     </span>
@@ -2285,7 +2302,7 @@ function Workspace({
                       </button>
                     ))}
                     {!draft.backlinks?.length && (
-                      <p className="inspector-empty">没有词条引用此处</p>
+                      <p className="inspector-empty">{translate(language, "没有词条引用此处")}</p>
                     )}
                   </div>
                 </section>
@@ -2296,7 +2313,7 @@ function Workspace({
                     onClick={() => setHistoryOpen((open) => !open)}
                   >
                     <History size={14} />
-                    <span>编辑历史</span>
+                    <span>{translate(language, "编辑历史")}</span>
                     <span className="count-badge">{history.length}</span>
                     <ChevronDown size={13} />
                   </button>
@@ -2316,13 +2333,13 @@ function Workspace({
                             disabled={!state.writable}
                             title={
                               state.writable
-                                ? `回退到版本 ${entry.version}`
-                                : "只读模式下无法回退历史版本"
+                                ? `${translate(language, "回退到版本")} ${entry.version}`
+                                : translate(language, "只读模式下无法回退历史版本")
                             }
                             onClick={() => void restoreVersion(entry.version)}
                           >
                             <span className="history-entry-top">
-                              <strong>版本 {entry.version}</strong>
+                              <strong>{translate(language, "版本")} {entry.version}</strong>
                               <time>{formatTimestamp(entry.changed_at)}</time>
                             </span>
                             <span className="history-description">
@@ -2331,7 +2348,7 @@ function Workspace({
                           </button>
                         ))}
                         {!history.length && (
-                          <p className="inspector-empty">暂无编辑记录</p>
+                          <p className="inspector-empty">{translate(language, "暂无编辑记录")}</p>
                         )}
                       </motion.div>
                     )}
@@ -2340,7 +2357,7 @@ function Workspace({
                 <section className="inspector-section">
                   <div className="inspector-heading">
                     <CalendarDays size={14} />
-                    <span>纪年节点</span>
+                    <span>{translate(language, "纪年节点")}</span>
                     <span className="count-badge">{timeline.length}</span>
                   </div>
                   {timeline.slice(0, 6).map((event) => (
@@ -2352,20 +2369,20 @@ function Workspace({
                     </div>
                   ))}
                   {!timeline.length && (
-                    <p className="inspector-empty">尚无时间记录</p>
+                    <p className="inspector-empty">{translate(language, "尚无时间记录")}</p>
                   )}
                 </section>
                 <section className="inspector-section entity-info">
                   <div className="inspector-heading">
                     <Sparkles size={14} />
-                    <span>词条信息</span>
+                    <span>{translate(language, "词条信息")}</span>
                   </div>
                   <div className="info-row">
-                    <span>类型</span>
-                    <span>{draft.type?.name}</span>
+                    <span>{translate(language, "类型")}</span>
+                    <span>{draft.type ? displayTypeName(language, draft.type) : ""}</span>
                   </div>
                   <div className="info-row">
-                    <span>颜色</span>
+                    <span>{translate(language, "颜色")}</span>
                     <ColorPicker
                       value={draft.color}
                       disabled={!state.writable}
@@ -2375,17 +2392,17 @@ function Workspace({
                     />
                   </div>
                   <div className="info-row">
-                    <span>属性数</span>
+                    <span>{translate(language, "属性数")}</span>
                     <span>{Object.keys(draft.custom_fields).length}</span>
                   </div>
                   <div className="info-row">
-                    <span>关联数</span>
+                    <span>{translate(language, "关联数")}</span>
                     <span>{draft.relations?.length ?? 0}</span>
                   </div>
                 </section>
                 <div className="inspector-bottom">
                   <span className="inspector-status-dot" />
-                  本地 SQLite 资料库
+                  {translate(language, "本地 SQLite 资料库")}
                 </div>
               </motion.aside>
             )}
@@ -2412,11 +2429,11 @@ function Workspace({
               <>
                 <button onClick={() => void openProject()}>
                   <FolderOpen size={14} />
-                  打开资料库
+                  {translate(language, "打开资料库")}
                 </button>
                 <button onClick={() => setCreateOpen(true)}>
                   <FilePlus2 size={14} />
-                  新建资料库
+                  {translate(language, "新建资料库")}
                 </button>
                 {state.project && (
                   <button
@@ -2427,18 +2444,18 @@ function Workspace({
                     }}
                   >
                     <Settings2 size={14} />
-                    资料库设置
+                    {translate(language, "资料库设置")}
                   </button>
                 )}
                 {state.project && (
                   <>
                     <button onClick={() => void exportJson()}>
                       <Save size={14} />
-                      导出为 JSON
+                      {translate(language, "导出为 JSON")}
                     </button>
                     <button disabled={!state.writable} onClick={() => void importJson()}>
                       <FolderOpen size={14} />
-                      导入 JSON
+                      {translate(language, "导入 JSON")}
                     </button>
                   </>
                 )}
@@ -2456,7 +2473,7 @@ function Workspace({
                       onClick={() => void createEntity(type)}
                     >
                       <Plus size={14} />
-                      新建词条
+                      {translate(language, "新建词条")}
                     </button>
                     <button
                       onClick={() => {
@@ -2467,13 +2484,13 @@ function Workspace({
                       }}
                     >
                       <Settings2 size={14} />
-                      管理类型与字段
+                      {translate(language, "管理类型与字段")}
                     </button>
                     <button
                       disabled={!state.writable || type.is_builtin}
                       onClick={() => void renameType(type.id)}
                     >
-                      重命名类型
+                      {translate(language, "重命名类型")}
                     </button>
                     <button
                       className="danger-menu-item"
@@ -2481,7 +2498,7 @@ function Workspace({
                       onClick={() => void deleteType(type.id)}
                     >
                       <Trash2 size={14} />
-                      删除类型
+                      {translate(language, "删除类型")}
                     </button>
                   </>
                 );
@@ -2496,14 +2513,14 @@ function Workspace({
                   <>
                     <button onClick={() => void selectEntity(entity)}>
                       <BookOpen size={14} />
-                      打开词条
+                      {translate(language, "打开词条")}
                     </button>
                     <button
                       disabled={!state.writable}
                       onClick={() => void renameEntity(entity.id)}
                     >
                       <Pencil size={14} />
-                      重命名词条
+                      {translate(language, "重命名词条")}
                     </button>
                     <button
                       className="danger-menu-item"
@@ -2511,7 +2528,7 @@ function Workspace({
                       onClick={() => void removeEntity(entity.id, entity.name)}
                     >
                       <Trash2 size={14} />
-                      删除词条
+                      {translate(language, "删除词条")}
                     </button>
                   </>
                 );
@@ -2549,12 +2566,12 @@ function Workspace({
                     setPaletteNoMatch(false);
                   }}
                   onKeyDown={onPaletteKeyDown}
-                  placeholder="搜索词条或跳转到…"
+                  placeholder={translate(language, "搜索词条或跳转到…")}
                 />
                 <kbd>ESC</kbd>
               </div>
               <div className="palette-label">
-                词条 <span>{paletteItems.length}</span>
+                {translate(language, "词条")} <span>{paletteItems.length}</span>
               </div>
               <div className="palette-results">
                 {paletteItems.slice(0, 12).map((entity, index) => {
@@ -2577,9 +2594,9 @@ function Workspace({
                       </span>
                       <span className="palette-result-copy">
                         <strong>{entity.name}</strong>
-                        <small>{entity.summary || type?.name}</small>
+                        <small>{entity.summary || (type ? displayTypeName(language, type) : "")}</small>
                       </span>
-                      <span className="result-category">{type?.name}</span>
+                      <span className="result-category">{type ? displayTypeName(language, type) : ""}</span>
                     </button>
                   );
                 })}
@@ -2588,20 +2605,20 @@ function Workspace({
                     className={`palette-empty ${paletteNoMatch ? "palette-no-match" : ""}`}
                     role={paletteNoMatch ? "alert" : undefined}
                   >
-                    {paletteNoMatch ? "未找到匹配内容" : "没有匹配的词条"}
+                    {translate(language, paletteNoMatch ? "未找到匹配内容" : "没有匹配的词条")}
                   </div>
                 )}
               </div>
               <div className="palette-footer">
                 <span>
                   <kbd>↑</kbd>
-                  <kbd>↓</kbd>选择
+                  <kbd>↓</kbd>{translate(language, "选择")}
                 </span>
                 <span>
-                  <kbd>↵</kbd>打开
+                  <kbd>↵</kbd>{translate(language, "打开")}
                 </span>
                 <span>
-                  <kbd>ESC</kbd>关闭
+                  <kbd>ESC</kbd>{translate(language, "关闭")}
                 </span>
               </div>
             </motion.div>
@@ -2628,20 +2645,20 @@ function Workspace({
             >
               <div className="dialog-heading">
                 <div>
-                  <span className="section-kicker">词条结构</span>
-                  <h2>新建词条类型</h2>
+                  <span className="section-kicker">{translate(language, "词条结构")}</span>
+                  <h2>{translate(language, "新建词条类型")}</h2>
                 </div>
                 <button
                   type="button"
                   className="icon-button"
-                  title="关闭"
+                  title={translate(language, "关闭")}
                   onClick={() => setTypeCreateOpen(false)}
                 >
                   <X size={16} />
                 </button>
               </div>
               <label>
-                类型名称
+                {translate(language, "类型名称")}
                 <input
                   autoFocus
                   value={typeCreateValues.name}
@@ -2651,12 +2668,12 @@ function Workspace({
                       name: event.target.value,
                     }))
                   }
-                  placeholder="例如：魔法体系"
+                  placeholder={translate(language, "例如：魔法体系")}
                   required
                 />
               </label>
               <label className="type-create-icon-field">
-                类型图标
+                {translate(language, "类型图标")}
                 <TypeIconPicker
                   value={typeCreateValues.icon}
                   onChange={(icon) =>
@@ -2670,7 +2687,7 @@ function Workspace({
                   className="secondary-button"
                   onClick={() => setTypeCreateOpen(false)}
                 >
-                  取消
+                  {translate(language, "取消")}
                 </button>
                 <button
                   type="submit"
@@ -2678,7 +2695,7 @@ function Workspace({
                   disabled={typeCreateSubmitting}
                 >
                   <Plus size={15} />
-                  {typeCreateSubmitting ? "创建中" : "创建类型"}
+                {translate(language, typeCreateSubmitting ? "创建中" : "创建类型")}
                 </button>
               </div>
             </motion.form>
@@ -2705,20 +2722,20 @@ function Workspace({
             >
               <div className="dialog-heading">
                 <div>
-                  <span className="section-kicker">本地资料库</span>
-                  <h2>创建新世界</h2>
+                  <span className="section-kicker">{translate(language, "本地资料库")}</span>
+                  <h2>{language === "en" ? "Create a New World" : "新建世界"}</h2>
                 </div>
                 <button
                   type="button"
                   className="icon-button"
-                  title="关闭"
+                  title={translate(language, "关闭")}
                   onClick={() => setCreateOpen(false)}
                 >
                   <X size={16} />
                 </button>
               </div>
               <label>
-                资料库名称
+                {translate(language, "资料库名称")}
                 <input
                   autoFocus
                   value={createValues.name}
@@ -2728,12 +2745,12 @@ function Workspace({
                       name: event.target.value,
                     }))
                   }
-                  placeholder="例如：星环纪事"
+                  placeholder={translate(language, "例如：星环纪事")}
                   required
                 />
               </label>
               <label>
-                纪年法名称
+                {language === "en" ? "Calendar Era" : "纪年法名称"}
                 <input
                   value={createValues.era_name}
                   onChange={(event) =>
@@ -2746,7 +2763,7 @@ function Workspace({
                 />
               </label>
               <label>
-                作者
+                {translate(language, "作者")}
                 <input
                   value={createValues.author}
                   onChange={(event) =>
@@ -2755,11 +2772,11 @@ function Workspace({
                       author: event.target.value,
                     }))
                   }
-                  placeholder="可选"
+                  placeholder={translate(language, "可选")}
                 />
               </label>
               <label>
-                说明
+                {translate(language, "说明")}
                 <textarea
                   value={createValues.description}
                   onChange={(event) =>
@@ -2768,7 +2785,7 @@ function Workspace({
                       description: event.target.value,
                     }))
                   }
-                  placeholder="可选"
+                  placeholder={translate(language, "可选")}
                   rows={2}
                 />
               </label>
@@ -2778,11 +2795,11 @@ function Workspace({
                   className="secondary-button"
                   onClick={() => setCreateOpen(false)}
                 >
-                  取消
+                  {translate(language, "取消")}
                 </button>
                 <button type="submit" className="primary-button">
                   <Plus size={15} />
-                  选择位置并创建
+                  {translate(language, "选择位置并创建")}
                 </button>
               </div>
             </motion.form>
@@ -2828,10 +2845,12 @@ function Workspace({
 function AliasInput({
   aliases,
   disabled,
+  language,
   onChange,
 }: {
   aliases: string[];
   disabled: boolean;
+  language: Language;
   onChange: (aliases: string[]) => void;
 }) {
   const [input, setInput] = useState<string | null>(null);
@@ -2839,7 +2858,7 @@ function AliasInput({
     <input
       className="inline-input"
       value={input ?? aliases.join("，")}
-      placeholder="添加别名"
+      placeholder={translate(language, "添加别名")}
       disabled={disabled}
       onBlur={() => setInput(null)}
       onChange={(event) => {
@@ -2907,11 +2926,13 @@ function daysInWorldMonth(year: number, month: number) {
 function DatePrecisionEditor({
   value,
   disabled,
+  language,
   onChange,
   onIssue,
 }: {
   value: DateParts;
   disabled: boolean;
+  language: Language;
   onChange: (value: DateParts) => void;
   onIssue: (message: string) => void;
 }) {
@@ -2928,15 +2949,15 @@ function DatePrecisionEditor({
     onChange(dateValue(year, nextMonth, nextDay));
 
   return (
-    <div className="world-date-editor" role="group" aria-label="日期精度">
+    <div className="world-date-editor" role="group" aria-label={translate(language, "日期精度")}>
       <input
-        aria-label="年份"
+        aria-label={translate(language, "年份")}
         type="number"
         inputMode="numeric"
         min={-999999}
         max={999999}
         value={year ?? ""}
-        placeholder="年"
+        placeholder={translate(language, "年")}
         disabled={disabled}
         onChange={(event) => {
           const raw = event.target.value;
@@ -2958,7 +2979,7 @@ function DatePrecisionEditor({
         }}
       />
       <select
-        aria-label="月份"
+        aria-label={translate(language, "月份")}
         value={month ?? ""}
         disabled={disabled}
         onChange={(event) => {
@@ -2975,13 +2996,13 @@ function DatePrecisionEditor({
           write(year, nextMonth, nextDay);
         }}
       >
-        <option value="">月</option>
+        <option value="">{translate(language, "月")}</option>
         {Array.from({ length: 12 }, (_, index) => index + 1).map((item) => (
-          <option value={item} key={item}>{item} 月</option>
+          <option value={item} key={item}>{item} {translate(language, "月")}</option>
         ))}
       </select>
       <select
-        aria-label="日"
+        aria-label={translate(language, "日")}
         value={day ?? ""}
         disabled={disabled}
         onChange={(event) => {
@@ -2997,9 +3018,9 @@ function DatePrecisionEditor({
           write(year, month, nextDay);
         }}
       >
-        <option value="">日</option>
+        <option value="">{translate(language, "日")}</option>
         {Array.from({ length: days }, (_, index) => index + 1).map((item) => (
-          <option value={item} key={item}>{item} 日</option>
+          <option value={item} key={item}>{item} {translate(language, "日")}</option>
         ))}
       </select>
     </div>
@@ -3009,11 +3030,13 @@ function DatePrecisionEditor({
 function WorldDateInput({
   value,
   disabled,
+  language,
   onChange,
   onIssue,
 }: {
   value: unknown;
   disabled: boolean;
+  language: Language;
   onChange: (value: unknown) => void;
   onIssue: (message: string) => void;
 }) {
@@ -3022,6 +3045,7 @@ function WorldDateInput({
     <DatePrecisionEditor
       value={parsed}
       disabled={disabled}
+      language={language}
       onIssue={onIssue}
       onChange={(next) =>
         onChange(next.date_value ?? (next.year == null ? "" : dateYearText(next.year)))
@@ -3033,6 +3057,7 @@ function WorldDateInput({
 function PropertyEditor({
   field,
   value,
+  language,
   disabled,
   entities,
   onIssue,
@@ -3041,6 +3066,7 @@ function PropertyEditor({
 }: {
   field: FieldDefinition;
   value: unknown;
+  language: Language;
   disabled: boolean;
   entities: EntitySummary[];
   onIssue: (message: string) => void;
@@ -3052,14 +3078,14 @@ function PropertyEditor({
   if (["choice", "select"].includes(field.field_type)) {
     control = (
       <Dropdown
-        label={field.name}
-        placeholder={allowEmpty ? "未设置" : "请选择地点类别"}
+        label={displayFieldName(language, field)}
+        placeholder={translate(language, allowEmpty ? "未设置" : "请选择地点类别")}
         value={textValue}
         onChange={(value) => onChange(value || undefined)}
         disabled={disabled}
         options={[
-          ...(allowEmpty ? [{ value: "", label: "未设置" }] : []),
-          ...field.options.map((option) => ({ value: option, label: option })),
+          ...(allowEmpty ? [{ value: "", label: translate(language, "未设置") }] : []),
+          ...field.options.map((option) => ({ value: option, label: field.protected ? displayFieldValue(language, field, option) as string : option })),
         ]}
       />
     );
@@ -3072,7 +3098,7 @@ function PropertyEditor({
           onChange={(event) => onChange(event.target.checked)}
           disabled={disabled}
         />
-        <span>{value ? "是" : "否"}</span>
+        <span>{translate(language, value ? "是" : "否")}</span>
       </label>
     );
   } else if (field.field_type === "date") {
@@ -3080,6 +3106,7 @@ function PropertyEditor({
       <WorldDateInput
         value={value}
         disabled={disabled}
+        language={language}
         onIssue={onIssue}
         onChange={onChange}
       />
@@ -3096,7 +3123,7 @@ function PropertyEditor({
     control = (
       <Dropdown
         multiple
-        label={field.name}
+        label={displayFieldName(language, field)}
         value={Array.isArray(value) ? value.map(String) : []}
         onChange={onChange}
         options={options}
@@ -3108,11 +3135,11 @@ function PropertyEditor({
   ) {
     control = (
       <Dropdown
-        label={field.name}
+        label={displayFieldName(language, field)}
         value={textValue}
         onChange={(value) => onChange(value || undefined)}
         options={[
-          { label: "未设置", value: "" },
+          { label: translate(language, "未设置"), value: "" },
           ...entities.map((entity) => ({
             label: entity.name,
             value: entity.id,
@@ -3126,7 +3153,7 @@ function PropertyEditor({
       <textarea
         value={textValue}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="未设置"
+        placeholder={translate(language, "未设置")}
         disabled={disabled}
         rows={2}
       />
@@ -3148,7 +3175,7 @@ function PropertyEditor({
               : event.target.value,
           )
         }
-        placeholder="未设置"
+        placeholder={translate(language, "未设置")}
         disabled={disabled}
       />
     );
@@ -3156,7 +3183,7 @@ function PropertyEditor({
   return (
     <label className="property-cell">
       <span>
-        {field.name}
+        {displayFieldName(language, field)}
         {field.required && <i className="required-mark">*</i>}
       </span>
       {control}
@@ -3166,6 +3193,7 @@ function PropertyEditor({
 
 function EditableText({
   kind,
+  language,
   value,
   placeholder,
   disabled,
@@ -3174,6 +3202,7 @@ function EditableText({
   suggestions = [],
 }: {
   kind: "title" | "summary" | "notes";
+  language: Language;
   value: string;
   placeholder: string;
   disabled: boolean;
@@ -3346,7 +3375,7 @@ function EditableText({
               <motion.div
                 className="mention-suggestions glass-menu"
                 role="listbox"
-                aria-label="词条引用候选"
+                aria-label={translate(language, "词条引用候选")}
                 style={{ left: completion.x, top: completion.y }}
                 initial={{ opacity: 0, scale: 0.97, y: 4 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}

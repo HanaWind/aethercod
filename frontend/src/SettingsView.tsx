@@ -23,6 +23,7 @@ import {
   type ProjectState,
 } from "./api";
 import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
+import { displayFieldName, displayTypeName, translate, type Language } from "./i18n";
 
 const FIELD_TYPES = [
   "text",
@@ -64,6 +65,8 @@ export default function SettingsView({
   onProjectUpdated,
   onChanged,
   onDirtyChange,
+  language,
+  onLanguageChange,
   onError,
   particlesEnabled,
   transitionsEnabled,
@@ -76,6 +79,8 @@ export default function SettingsView({
   onProjectUpdated: (state: ProjectState) => void;
   onChanged: () => Promise<void>;
   onDirtyChange: (dirty: boolean) => void;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
   onError: (message: string) => void;
   particlesEnabled: boolean;
   transitionsEnabled: boolean;
@@ -247,9 +252,9 @@ export default function SettingsView({
     if (
       type.is_builtin ||
       (await actionDialog({
-        title: "删除类型",
-        message: `删除“${type.name}”？`,
-        confirmLabel: "删除",
+        title: translate(language, "删除类型"),
+        message: `${translate(language, "删除类型确认前缀")}${displayTypeName(language, type)}${translate(language, "删除类型确认后缀")}`,
+        confirmLabel: translate(language, "删除"),
         danger: true,
       })) === null
     )
@@ -321,9 +326,9 @@ export default function SettingsView({
   const deleteField = async (field: FieldDefinition) => {
     if (
       (await actionDialog({
-        title: "删除字段",
-        message: `删除“${field.name}”及其已保存的值？`,
-        confirmLabel: "删除",
+        title: translate(language, "删除字段"),
+        message: `${translate(language, "删除字段确认前缀")}${displayFieldName(language, field)}${translate(language, "删除字段确认后缀")}`,
+        confirmLabel: translate(language, "删除"),
         danger: true,
       })) === null
     )
@@ -343,23 +348,23 @@ export default function SettingsView({
     <div className="settings-page">
       <header className="view-header">
         <div>
-          <span className="section-kicker">资料库管理</span>
-          <h1>设置</h1>
+          <span className="section-kicker">{translate(language, "资料库管理")}</span>
+          <h1>{translate(language, "设置")}</h1>
         </div>
-        <nav className="settings-tabs" aria-label="设置分类">
+        <nav className="settings-tabs" aria-label={translate(language, "设置分类")}>
           <button
             className={tab === "library" ? "active" : ""}
             onClick={() => setTab("library")}
           >
             <FileCog size={14} />
-            资料库
+            {translate(language, "资料库")}
           </button>
           <button
             className={tab === "types" ? "active" : ""}
             onClick={() => setTab("types")}
           >
             <ChevronDown size={14} />
-            类型与字段
+            {translate(language, "类型与字段")}
           </button>
         </nav>
       </header>
@@ -381,13 +386,13 @@ export default function SettingsView({
           <section className="settings-section">
             <div className="settings-section-title">
               <div>
-                <span className="section-kicker">当前项目</span>
-                <h2>资料库信息</h2>
+                <span className="section-kicker">{translate(language, "当前项目")}</span>
+                <h2>{translate(language, "资料库信息")}</h2>
               </div>
               <button
                 type="button"
                 className="path-label"
-                aria-label={`在文件管理器中显示资料库 ${project.path}`}
+                aria-label={`${translate(language, "在文件管理器中显示资料库")} ${project.path}`}
                 title={project.path}
                 onClick={() => void desktopApi()?.reveal_project_file().catch((reason: Error) => onError(reason.message))}
               >
@@ -399,7 +404,7 @@ export default function SettingsView({
               disabled={!state.writable || saving}
             >
               <label>
-                资料库名称
+                {translate(language, "资料库名称")}
                 <input
                   value={project.name}
                   onChange={(event) =>
@@ -409,7 +414,7 @@ export default function SettingsView({
                 />
               </label>
               <label>
-                纪年法
+                {translate(language, "纪年法")}
                 <input
                   value={project.era_name}
                   onChange={(event) =>
@@ -419,7 +424,7 @@ export default function SettingsView({
                 />
               </label>
               <label>
-                作者
+                {translate(language, "作者")}
                 <input
                   value={project.author}
                   onChange={(event) =>
@@ -428,7 +433,7 @@ export default function SettingsView({
                 />
               </label>
               <label className="span-all">
-                说明
+                {translate(language, "说明")}
                 <textarea
                   rows={4}
                   value={project.description}
@@ -445,23 +450,40 @@ export default function SettingsView({
                 disabled={!state.writable || saving}
               >
                 <Save size={14} />
-                {saving ? "保存中" : "保存资料库设置"}
+                {translate(language, saving ? "正在保存" : "保存资料库设置")}
               </button>
+            </div>
+          </section>
+          <section className="settings-section language-section">
+            <div className="settings-section-title">
+              <div>
+                <span className="section-kicker">Language</span>
+                <h2>{language === "en" ? "Language" : "语言设置"}</h2>
+              </div>
+              <Dropdown
+                label="Language"
+                value={language}
+                onChange={(next) => onLanguageChange(next as Language)}
+                options={[
+                  { value: "zh", label: "中文" },
+                  { value: "en", label: "English" },
+                ]}
+              />
             </div>
           </section>
           <section className="settings-section save-settings-section">
             <div className="settings-section-title">
               <div>
-                <span className="section-kicker">保存机制</span>
-                <h2>编辑保存策略</h2>
+                <span className="section-kicker">{translate(language, "保存机制")}</span>
+                <h2>{translate(language, "编辑保存策略")}</h2>
               </div>
               <Clock3 size={18} />
             </div>
-            <div className="save-mode-options" role="radiogroup" aria-label="保存机制">
+            <div className="save-mode-options" role="radiogroup" aria-label={translate(language, "保存机制")}>
               {([
-                ["manual", "手动保存", "仅在点击保存或按 Ctrl+S 时写入资料库"],
-                ["interval", "定时自动保存", "按设定的分钟间隔保存未提交修改"],
-                ["realtime", "实时自动保存", "编辑后短暂等待并同步到资料库"],
+                ["manual", translate(language, "手动保存"), translate(language, "仅在点击保存或按 Ctrl+S 时写入资料库")],
+                ["interval", translate(language, "定时自动保存"), translate(language, "按设定的分钟间隔保存未提交修改")],
+                ["realtime", translate(language, "实时自动保存"), translate(language, "编辑后短暂等待并同步到资料库")],
               ] as const).map(([mode, label, description]) => (
                 <button
                   type="button"
@@ -491,7 +513,7 @@ export default function SettingsView({
                   transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
                 >
                   <label className="save-interval-field">
-                    自动保存间隔（分钟）
+                    {translate(language, "自动保存间隔（分钟）")}
                     <input
                       type="number"
                       min={1}
@@ -515,19 +537,19 @@ export default function SettingsView({
                 onClick={() => void saveSaveSettings()}
               >
                 <Save size={14} />
-                保存
+                {translate(language, "保存")}
               </button>
             </div>
           </section>
           <section className="settings-section visual-settings">
-            <div className="settings-section-title"><h2>视觉动效与性能</h2></div>
+            <div className="settings-section-title"><h2>{translate(language, "视觉动效与性能")}</h2></div>
             <label>
-              <span>背景粒子</span>
+              <span>{translate(language, "背景粒子")}</span>
               <input type="checkbox" checked={particlesEnabled}
                 onChange={(event) => onParticlesChange(event.target.checked)} />
             </label>
             <label>
-              <span>界面过渡动画</span>
+              <span>{translate(language, "界面过渡动画")}</span>
               <input type="checkbox" checked={transitionsEnabled}
                 onChange={(event) => onTransitionsChange(event.target.checked)} />
             </label>
@@ -535,34 +557,34 @@ export default function SettingsView({
           <section className="settings-section preference-section">
             <div className="settings-section-title">
               <div>
-                <span className="section-kicker">访问状态</span>
+                <span className="section-kicker">{translate(language, "访问状态")}</span>
                 <h2>
-                  {state.read_only
+                  {translate(language, state.read_only
                     ? "当前状态：只读锁定模式"
                     : state.writable
                       ? "当前状态：正常可编辑（读写模式）"
-                      : "当前状态：资料库不可写"}
+                      : "当前状态：资料库不可写")}
                 </h2>
               </div>
               <ShieldCheck size={18} />
             </div>
             <p>
-              {state.read_only
+              {translate(language, state.read_only
                 ? "正文、属性和关联均已锁定，关闭只读模式后可继续编辑。"
                 : state.writable
                   ? "词条正文、属性、关联和资料库设置均可写入本地数据库。"
-                  : "当前资料库权限不允许写入，设置和词条内容无法保存。"}
+                  : "当前资料库权限不允许写入，设置和词条内容无法保存。")}
             </p>
           </section>
           <section className="settings-section feedback-section">
             <div className="settings-section-title">
               <div>
-                <span className="section-kicker">反馈与开源</span>
-                <h2>参与 Aethercod</h2>
+                <span className="section-kicker">{translate(language, "反馈与开源")}</span>
+                <h2>{translate(language, "参与 Aethercod")}</h2>
               </div>
               <Github size={18} />
             </div>
-            <p>欢迎提交问题反馈、功能建议或代码贡献。</p>
+            <p>{translate(language, "欢迎提交问题反馈、功能建议或代码贡献。")}</p>
             <a
               className="secondary-button github-button"
               href="https://github.com/HanaWind/aethercod"
@@ -578,7 +600,7 @@ export default function SettingsView({
               }}
             >
               <ExternalLink size={14} />
-              项目 GitHub
+              {translate(language, "项目 GitHub")}
             </a>
           </section>
         </form>
@@ -587,8 +609,8 @@ export default function SettingsView({
           <aside className="taxonomy-list">
             <div className="settings-section-title">
               <div>
-                <span className="section-kicker">词条结构</span>
-                <h2>类型</h2>
+                <span className="section-kicker">{translate(language, "词条结构")}</span>
+                <h2>{translate(language, "类型")}</h2>
               </div>
             </div>
             {types.filter((type) => !type.hidden).map((type) => (
@@ -603,14 +625,14 @@ export default function SettingsView({
                     return Icon ? <Icon size={15} /> : type.icon;
                   })()}
                 </span>
-                <strong>{type.name}</strong>
-                <small>{type.is_builtin ? "内置" : "自定义"}</small>
+                <strong>{displayTypeName(language, type)}</strong>
+                <small>{translate(language, type.is_builtin ? "内置" : "自定义")}</small>
               </button>
             ))}
             {types.some((type) => type.hidden) && (
               <section className="hidden-types-section">
                 <div className="hidden-types-heading">
-                  <span>已隐藏的词条类型</span>
+                  <span>{translate(language, "已隐藏的词条类型")}</span>
                   <span>{types.filter((type) => type.hidden).length}</span>
                 </div>
                 {types.filter((type) => type.hidden).map((type) => (
@@ -625,11 +647,11 @@ export default function SettingsView({
                           return Icon ? <Icon size={15} /> : type.icon;
                         })()}
                       </span>
-                      <strong>{type.name}</strong>
+                      <strong>{displayTypeName(language, type)}</strong>
                     </button>
                     <button
                       className="icon-button compact"
-                      title={`恢复显示 ${type.name}`}
+                      title={`${translate(language, "恢复显示")} ${displayTypeName(language, type)}`}
                       disabled={!state.writable}
                       onClick={() => void toggleTypeHidden(type)}
                     >
@@ -644,10 +666,10 @@ export default function SettingsView({
               onSubmit={(event) => void createType(event)}
             >
               <input
-                aria-label="新类型名称"
+                aria-label={translate(language, "新类型名称")}
                 value={newTypeName}
                 onChange={(event) => setNewTypeName(event.target.value)}
-                placeholder="新类型名称"
+                placeholder={translate(language, "新类型名称")}
                 required
                 disabled={!state.writable}
               />
@@ -658,7 +680,7 @@ export default function SettingsView({
               />
               <button
                 className="icon-button compact"
-                title="创建类型"
+                title={translate(language, "创建类型")}
                 disabled={!state.writable}
               >
                 <Plus size={14} />
@@ -674,9 +696,9 @@ export default function SettingsView({
                 >
                   <div className="settings-section-title">
                     <div>
-                      <span className="section-kicker">类型配置</span>
+                      <span className="section-kicker">{translate(language, "类型配置")}</span>
                       <h2>
-                        {types.find((type) => type.id === selectedTypeId)?.name}
+                        {selectedType && displayTypeName(language, selectedType)}
                       </h2>
                     </div>
                     <div className="type-header-actions">
@@ -685,8 +707,8 @@ export default function SettingsView({
                         className="icon-button"
                         title={
                           types.find((type) => type.id === selectedTypeId)?.hidden
-                            ? "恢复显示类型"
-                            : "隐藏类型"
+                            ? translate(language, "恢复显示类型")
+                            : translate(language, "隐藏类型")
                         }
                         disabled={!state.writable}
                         onClick={() => {
@@ -707,7 +729,7 @@ export default function SettingsView({
                       <button
                         type="button"
                         className="icon-button"
-                        title="删除类型"
+                        title={translate(language, "删除类型")}
                         disabled={!state.writable}
                         onClick={() =>
                           void deleteType(
@@ -722,7 +744,7 @@ export default function SettingsView({
                   </div>
                   <div className="type-edit-row">
                     <label>
-                      名称
+                      {translate(language, "名称")}
                       <input
                         value={typeName}
                         disabled={
@@ -736,7 +758,7 @@ export default function SettingsView({
                       />
                     </label>
                     <label className="type-icon-field">
-                      图标
+                      {translate(language, "图标")}
                       <TypeIconPicker
                         value={typeIcon}
                         onChange={setTypeIcon}
@@ -747,15 +769,15 @@ export default function SettingsView({
                       className="secondary-button"
                       disabled={!state.writable}
                     >
-                      保存类型
+                      {translate(language, "保存类型")}
                     </button>
                   </div>
                 </form>
                 <div className="settings-section-title field-list-heading">
                   <div>
-                    <span className="section-kicker">动态 EAV 字段</span>
+                    <span className="section-kicker">{translate(language, "动态 EAV 字段")}</span>
                     <h2>
-                      自定义字段{" "}
+                      {translate(language, "自定义字段")}{" "}
                       <span className="heading-count">{fields.length}</span>
                     </h2>
                   </div>
@@ -764,13 +786,13 @@ export default function SettingsView({
                   {fields.map((field) => (
                     <div className="field-definition-row" key={field.id}>
                       <button onClick={() => editField(field)}>
-                        <strong>{field.name}</strong>
+                        <strong>{displayFieldName(language, field)}</strong>
                         <span>{field.field_type}</span>
-                        {field.required && <small>必填</small>}
+                        {field.required && <small>{translate(language, "必填")}</small>}
                       </button>
                       <button
                         className="icon-button compact"
-                        title={`删除 ${field.name}`}
+                        title={`${translate(language, "删除")} ${displayFieldName(language, field)}`}
                         disabled={!state.writable || field.protected}
                         onClick={() => void deleteField(field)}
                       >
@@ -787,14 +809,14 @@ export default function SettingsView({
                     <div className="settings-section-title">
                       <div>
                         <span className="section-kicker">
-                          {fieldDraft.id ? "编辑定义" : "新建定义"}
+                          {translate(language, fieldDraft.id ? "编辑定义" : "新建定义")}
                         </span>
-                        <h2>{fieldDraft.id ? fieldDraft.name : "添加字段"}</h2>
+                        <h2>{fieldDraft.id ? (savedField ? displayFieldName(language, savedField) : fieldDraft.name) : translate(language, "添加字段")}</h2>
                       </div>
                       <button
                         type="button"
                         className="icon-button compact"
-                        title="新建字段"
+                        title={translate(language, "新建字段")}
                         onClick={() => editField()}
                       >
                         <CirclePlus size={15} />
@@ -802,7 +824,7 @@ export default function SettingsView({
                     </div>
                     <div className="field-editor-grid">
                       <label>
-                        字段名称
+                        {translate(language, "字段名称")}
                         <input
                           value={fieldDraft.name}
                           onChange={(event) =>
@@ -816,9 +838,9 @@ export default function SettingsView({
                         />
                       </label>
                       <label>
-                        数据类型
+                        {translate(language, "数据类型")}
                         <Dropdown
-                          label="数据类型"
+                          label={translate(language, "数据类型")}
                           value={fieldDraft.field_type}
                           options={[
                             ...new Set([...FIELD_TYPES, fieldDraft.field_type]),
@@ -830,7 +852,7 @@ export default function SettingsView({
                         />
                       </label>
                       <label className="span-all">
-                        说明
+                        {translate(language, "说明")}
                         <input
                           value={fieldDraft.description}
                           onChange={(event) =>
@@ -846,7 +868,7 @@ export default function SettingsView({
                         fieldDraft.field_type,
                       ) && (
                         <label className="span-all">
-                          选项
+                          {translate(language, "选项")}
                           <input
                             value={fieldDraft.options}
                             onChange={(event) =>
@@ -855,7 +877,7 @@ export default function SettingsView({
                                 options: event.target.value,
                               })
                             }
-                            placeholder="用逗号分隔选项"
+                            placeholder={translate(language, "用逗号分隔选项")}
                             disabled={!state.writable}
                           />
                         </label>
@@ -872,7 +894,7 @@ export default function SettingsView({
                           }
                           disabled={!state.writable}
                         />
-                        必填字段
+                        {translate(language, "必填字段")}
                       </label>
                     </div>
                     <div className="settings-form-actions">
@@ -881,7 +903,7 @@ export default function SettingsView({
                         disabled={!state.writable}
                       >
                         <Save size={14} />
-                        保存字段
+                        {translate(language, "保存字段")}
                       </button>
                     </div>
                   </form>
@@ -917,7 +939,7 @@ export default function SettingsView({
                 transition={{ duration: 0.32, ease: "easeOut" }}
               />
             </svg>
-            保存机制已更新
+            {language === "en" ? "Save behavior updated" : "保存机制已更新"}
           </motion.div>
         )}
       </AnimatePresence>
