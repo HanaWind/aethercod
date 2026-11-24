@@ -12,3 +12,5 @@ migrate.md
 references/
 frontend/node_modules/
 HANDOFF.md
+frontend/dist/
+src/aethercod/frontend_dist/
