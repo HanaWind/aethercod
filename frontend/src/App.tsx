@@ -193,6 +193,8 @@ function Workspace({
     icon: "Sparkles",
   });
   const [typeCreateSubmitting, setTypeCreateSubmitting] = useState(false);
+  const typeCreateSession = useRef(0);
+  const typeCreateInFlight = useRef(false);
   const [createValues, setCreateValues] = useState({
     name: "",
     era_name: "泰拉纪元",
@@ -297,6 +299,11 @@ function Workspace({
     return () => window.removeEventListener("resize", resize);
   }, []);
 
+  const closeTypeCreate = useCallback(() => {
+    typeCreateSession.current += 1;
+    setTypeCreateOpen(false);
+  }, []);
+
   const changeSelection = useCallback((id: string, entity: Entity | null = null) => {
     entityRequest.current += 1;
     selectedEntryId.current = id;
@@ -305,12 +312,16 @@ function Workspace({
     setDraft(entity);
     setTimeline([]);
     setHistory([]);
+    setContextMenu(null);
+    setPaletteOpen(false);
+    closeTypeCreate();
+    setCreateOpen(false);
     setCategoryEditing(false);
     setRelationPreview(null);
     setShowRelationForm(false);
     setRelationValues({ target_id: "", label: "", reverse_label: "" });
     setNewDate({ label: "", year: "", date_value: null, precision: "year", description: "" });
-  }, []);
+  }, [closeTypeCreate]);
 
   const syncState = useCallback((next: ProjectState) => {
     setState(next);
@@ -328,12 +339,6 @@ function Workspace({
       setGraphFilterIds([]);
       setRelatedGraphId("");
       setActiveView("entries");
-    } else if (
-      selectedEntryId.current &&
-      !pendingDrafts.current.has(selectedEntryId.current) &&
-      !next.entities.some((entity) => entity.id === selectedEntryId.current)
-    ) {
-      changeSelection("");
     }
   }, [changeSelection]);
 
@@ -359,8 +364,13 @@ function Workspace({
   const loadEntity = useCallback(async (id: string, reveal = true) => {
     const api = desktopApi();
     if (!api || !projectPath.current || closeInProgress.current) return;
+    id = normalizeEntryId(id);
     if (reveal) {
-      if (id !== selectedEntryId.current) changeSelection(id);
+      if (id !== selectedEntryId.current) changeSelection(id, pendingDrafts.current.get(id)?.entity);
+      else {
+        setContextMenu(null);
+        setRelationPreview(null);
+      }
       setActiveView("entries");
       setError("");
     } else if (id !== selectedEntryId.current) {
@@ -371,7 +381,8 @@ function Workspace({
     try {
       const entity = await api.get_entity(id);
       if (!isCurrent()) return;
-      const current = pendingDrafts.current.get(id)?.entity ?? entity;
+      const current = pendingDrafts.current.get(id)?.entity ??
+        (entity && normalizeEntryId(entity.id) === id ? entity : null);
       setDraft(current);
       if (current && reveal) {
         setActiveTypeId(current.type_id);
@@ -533,7 +544,7 @@ function Workspace({
     if (projectPath.current !== path || next.project?.path !== path) return;
     syncState(next);
     const id = selectedEntryId.current;
-    if (next.entities.some((entity) => entity.id === id)) await loadEntity(id, false);
+    if (id) await loadEntity(id, false);
   }, [loadEntity, syncState]);
 
   const toggleReadOnly = async () => {
@@ -609,7 +620,7 @@ function Workspace({
       setGraph(await api.get_graph());
       setGlobalTimeline(await api.get_timeline());
       const id = selectedEntryId.current;
-      if (next.entities.some((entity) => entity.id === id)) await loadEntity(id, false);
+      if (id) await loadEntity(id, false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -658,8 +669,10 @@ function Workspace({
     }
   };
 
-  const createType = async () => {
-    if (!state.writable || !(await flushDraft())) return;
+  const createType = () => {
+    if (!state.writable || closeInProgress.current) return;
+    setContextMenu(null);
+    setPaletteOpen(false);
     setTypeCreateValues({ name: "", icon: "Sparkles" });
     setTypeCreateOpen(true);
   };
@@ -668,26 +681,32 @@ function Workspace({
     event.preventDefault();
     if (
       !state.writable ||
-      typeCreateSubmitting ||
+      typeCreateInFlight.current ||
       !typeCreateValues.name.trim()
     )
       return;
+    const path = projectPath.current;
+    const session = typeCreateSession.current;
+    typeCreateInFlight.current = true;
     setTypeCreateSubmitting(true);
     try {
       const created = await desktopApi()?.create_type(
         typeCreateValues.name.trim(),
         typeCreateValues.icon,
       );
-      if (created) {
-        setTypeCreateOpen(false);
-        await refreshProject();
-        setSettingsTab("types");
-        setSettingsTypeId(created.id);
-        await navigateTo("settings");
+      if (created && projectPath.current === path) {
+        if (typeCreateSession.current === session) {
+          closeTypeCreate();
+          setSettingsTab("types");
+          setSettingsTypeId(created.id);
+          void navigateTo("settings");
+        }
+        void refreshProject().catch((reason: Error) => setError(reason.message));
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      typeCreateInFlight.current = false;
       setTypeCreateSubmitting(false);
     }
   };
@@ -773,7 +792,7 @@ function Workspace({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (closeInProgress.current) return;
+      if (closeInProgress.current || event.defaultPrevented) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen(true);
@@ -790,7 +809,7 @@ function Workspace({
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
         setCreateOpen(false);
-        setTypeCreateOpen(false);
+        closeTypeCreate();
         setContextMenu(null);
       }
     };
@@ -1319,7 +1338,7 @@ function Workspace({
                       className="icon-button compact"
                     title={translate(language, "新建词条类型")}
                       disabled={!state.writable}
-                      onClick={() => void createType()}
+                      onClick={createType}
                     >
                       <Plus size={15} />
                     </button>
@@ -1644,6 +1663,7 @@ function Workspace({
           ) : activeView === "graph" && state.project ? (
             <GraphView
               graph={graph}
+              language={language}
               types={state.types}
               entities={state.entities.map((entity) =>
                 pendingDrafts.current.get(entity.id)?.entity ?? entity,
@@ -1727,6 +1747,14 @@ function Workspace({
             </section>
           ) : loadingEntry && !draft ? (
             <div className="empty-view" role="status">{translate(language, "正在加载")}</div>
+          ) : selectedId && !draft ? (
+            <section className="welcome-state compact-welcome">
+              <h1>{translate(language, "无法打开此词条")}</h1>
+              <p>{translate(language, "词条可能已被删除，或暂时无法加载。")}</p>
+              <button className="secondary-button" onClick={() => void loadEntity(selectedId)}>
+                {translate(language, "重试")}
+              </button>
+            </section>
           ) : !draft ? (
             <section className="welcome-state compact-welcome">
               <div className="welcome-glyph">
@@ -1955,7 +1983,7 @@ function Workspace({
                         <div className="relation-pills">
                           {draft.relations?.map((relation) => {
                             const target = state.entities.find(
-                              (item) => item.id === relation.other_id,
+                              (item) => item.id === normalizeEntryId(relation.other_id),
                             );
                             const targetType = target
                               ? typeById(target.type_id)
@@ -1965,8 +1993,9 @@ function Workspace({
                                 key={relation.id}
                                 className="relation-pill"
                                 whileHover={{ y: -1 }}
-                                onHoverStart={(event) => {
-                                  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                                onPointerEnter={(event) => {
+                                  if (event.pointerType === "touch") return;
+                                  const bounds = event.currentTarget.getBoundingClientRect();
                                   setRelationPreview({
                                     entityId: draft.id,
                                     name: relation.other_name,
@@ -1976,10 +2005,8 @@ function Workspace({
                                     bottom: window.innerHeight - bounds.top + 7,
                                   });
                                 }}
-                                onHoverEnd={() => setRelationPreview(null)}
-                                onClick={() => {
-                                  if (target) void selectEntity(target);
-                                }}
+                                onPointerLeave={() => setRelationPreview(null)}
+                                onClick={() => void loadEntity(relation.other_id)}
                               >
                                 <span
                                   className="entity-dot"
@@ -2372,6 +2399,7 @@ function Workspace({
                   <div className="info-row">
                     <span>{translate(language, "颜色")}</span>
                     <ColorPicker
+                      language={language}
                       value={draft.color}
                       disabled={!state.writable}
                       onChange={(color) =>
@@ -2476,6 +2504,7 @@ function Workspace({
                       disabled={!state.writable || type.is_builtin}
                       onClick={() => void renameType(type.id)}
                     >
+                      <Pencil size={14} aria-hidden="true" />
                       {translate(language, "重命名类型")}
                     </button>
                     <button
@@ -2608,17 +2637,19 @@ function Workspace({
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {typeCreateOpen && (
-          <motion.div
+      {typeCreateOpen && (
+          <div
             className="modal-scrim"
-            {...glassFade}
-            onMouseDown={() => setTypeCreateOpen(false)}
+            onMouseDown={closeTypeCreate}
           >
             <motion.form
               className="create-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label={translate(language, "新建词条类型")}
               onSubmit={(event) => void submitCreateType(event)}
-              {...glassSlide(8)}
+              initial={glassSlide(8).initial}
+              animate={glassSlide(8).animate}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="dialog-heading">
@@ -2630,7 +2661,7 @@ function Workspace({
                   type="button"
                   className="icon-button"
                   title={translate(language, "关闭")}
-                  onClick={() => setTypeCreateOpen(false)}
+                  onClick={closeTypeCreate}
                 >
                   <X size={16} />
                 </button>
@@ -2654,6 +2685,7 @@ function Workspace({
                 {translate(language, "类型图标")}
                 <TypeIconPicker
                   value={typeCreateValues.icon}
+                  language={language}
                   onChange={(icon) =>
                     setTypeCreateValues((current) => ({ ...current, icon }))
                   }
@@ -2663,7 +2695,7 @@ function Workspace({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={() => setTypeCreateOpen(false)}
+                  onClick={closeTypeCreate}
                 >
                   {translate(language, "取消")}
                 </button>
@@ -2677,9 +2709,8 @@ function Workspace({
                 </button>
               </div>
             </motion.form>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
+      )}
 
       <AnimatePresence>
         {createOpen && (
@@ -3480,6 +3511,13 @@ function getTextareaCaret(textarea: HTMLTextAreaElement, cursor: number) {
 
 function formatUuid(id: string) {
   return id.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+}
+
+function normalizeEntryId(id: string) {
+  const value = id.trim().toLowerCase();
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)
+    ? value.replaceAll("-", "")
+    : value;
 }
 
 function formatDate(value: string) {

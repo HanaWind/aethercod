@@ -21,6 +21,7 @@ import {
 import type { EntitySummary, EntityType, GraphData, GraphNode } from "./api";
 import { initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius } from "./graphLayout";
 import { glassFade, glassSlide } from "./glassMotion";
+import { displayTypeName, translate, type Language } from "./i18n";
 
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.2;
@@ -39,6 +40,7 @@ function floatStyle(node: GraphNode, enabled: boolean): CSSProperties | undefine
 
 export default function GraphView({
   graph,
+  language,
   types,
   entities,
   selectedIds,
@@ -52,6 +54,7 @@ export default function GraphView({
   onError,
 }: {
   graph: GraphData;
+  language: Language;
   types: EntityType[];
   entities: EntitySummary[];
   selectedIds: string[];
@@ -64,6 +67,13 @@ export default function GraphView({
   onDelete: (entityId: string, name: string) => void;
   onError: (message: string) => void;
 }) {
+  const t = (key: string) => translate(language, key);
+  const percent = new Intl.NumberFormat(language === "en" ? "en" : "zh-CN", { style: "percent" });
+  const plural = (count: number, singular: string) => `${count} ${singular}${count === 1 ? "" : "s"}`;
+  const typeNames = useMemo(
+    () => new Map(types.map((type) => [type.id, displayTypeName(language, type)])),
+    [types, language],
+  );
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
@@ -481,16 +491,16 @@ export default function GraphView({
     <div className="graph-page">
       <header className="view-header">
         <div>
-          <span className="section-kicker">实体与关系</span>
-          <h1>{relatedEntityId ? "关联图谱" : "关系网"}</h1>
+          <span className="section-kicker">{t("实体与关系")}</span>
+          <h1>{t(relatedEntityId ? "关联图谱" : "关系网")}</h1>
         </div>
         <div className="graph-filter-wrap">
           <div className="graph-filter-input">
             <Search size={14} />
             <input
               value={filterQuery}
-              aria-label="筛选关系网词条"
-              placeholder="搜索并筛选词条"
+              aria-label={t("筛选关系网词条")}
+              placeholder={t("搜索并筛选词条")}
               onFocus={() => setFilterOpen(true)}
               onChange={(event) => {
                 setFilterQuery(event.target.value);
@@ -509,7 +519,8 @@ export default function GraphView({
             {selectedIds.length > 0 && (
               <button
                 className="graph-filter-clear"
-                title="清除全部筛选"
+                title={t("清除全部筛选")}
+                aria-label={t("清除全部筛选")}
                 onClick={() => changeFilters([])}
               >
                 <X size={13} />
@@ -525,7 +536,8 @@ export default function GraphView({
                   <span className="graph-filter-chip" key={id}>
                     {entity.name}
                     <button
-                      title={`移除 ${entity.name} 筛选`}
+                      title={t("移除 {name} 筛选").replace("{name}", () => entity.name)}
+                      aria-label={t("移除 {name} 筛选").replace("{name}", () => entity.name)}
                       onClick={() =>
                         changeFilters(selectedIds.filter((item) => item !== id))
                       }
@@ -537,7 +549,7 @@ export default function GraphView({
               })}
             </div>
           )}
-          {filterOpen && filterOptions.length > 0 && (
+          {filterOpen && (filterOptions.length > 0 || filterQuery.trim()) && (
             <div className="graph-filter-menu glass-menu">
               {filterOptions.slice(0, 8).map((entity) => (
                 <button
@@ -552,28 +564,36 @@ export default function GraphView({
                   <span>{entity.name}</span>
                 </button>
               ))}
+              {!filterOptions.length && <p role="status">{t("没有匹配的词条")}</p>}
             </div>
           )}
         </div>
         <div className="graph-controls">
           <span>
-            {visibleGraph.nodes.length} 个实体 · {visibleGraph.edges.length} 条关系
+            {language === "en"
+              ? `${plural(visibleGraph.nodes.length, "node")} · ${plural(visibleGraph.edges.length, "relationship")}`
+              : `${visibleGraph.nodes.length} 个实体 · ${visibleGraph.edges.length} 条关系`}
           </span>
           <button
             className="icon-button"
-            title="缩小"
+            title={t("缩小")}
+            aria-label={t("缩小")}
             onClick={() => zoomBy(-0.12)}
           >
             <ZoomOut size={15} />
           </button>
+          <output className="graph-zoom-level" title={t("缩放比例")} aria-label={t("缩放比例")}>
+            {percent.format(zoom)}
+          </output>
           <button
             className="icon-button"
-            title="放大"
+            title={t("放大")}
+            aria-label={t("放大")}
             onClick={() => zoomBy(0.12)}
           >
             <ZoomIn size={15} />
           </button>
-          <button className="icon-button" title="适配视图" onClick={fit}>
+          <button className="icon-button" title={t("适配视图")} aria-label={t("适配视图")} onClick={fit}>
             <Maximize2 size={15} />
           </button>
         </div>
@@ -646,7 +666,7 @@ export default function GraphView({
             </g>
           </svg>
           <div className="graph-node-layer" role="group"
-            aria-label={relatedEntityId ? "词条关联图谱" : "词条关系网"}>
+            aria-label={t(relatedEntityId ? "词条关联图谱" : "词条关系网")}>
               <AnimatePresence initial={false}>
                 {[...visibleGraph.nodes].sort((left, right) =>
                   Number(left.id === centeredNodeId) - Number(right.id === centeredNodeId),
@@ -657,7 +677,7 @@ export default function GraphView({
                   className="graph-node graph-node-glass"
                   {...glassFade}
                   transition={{ duration: 0.17 }}
-                  aria-label={`${node.name}，单击居中，双击打开`}
+                  aria-label={t("{name}，单击居中，双击打开").replace("{name}", () => node.name)}
                   aria-pressed={node.id === centeredNodeId}
                   style={{
                     ...floatStyle(node, motionEnabled && node.id !== centeredNodeId),
@@ -691,7 +711,7 @@ export default function GraphView({
                   <span className="graph-node-copy">
                     <span className="graph-node-name">{node.name}</span>
                     <span className="graph-node-type">
-                      {types.find((type) => type.id === node.type_id)?.name ?? "词条"}
+                      {typeNames.get(node.type_id) ?? t("词条")}
                     </span>
                   </span>
                 </motion.button>
@@ -702,7 +722,7 @@ export default function GraphView({
         ) : (
           <div className="empty-view graph-empty">
             <Network size={22} />
-            <strong>{relatedEntityId ? "关联图谱暂无节点" : "关系网暂无节点"}</strong>
+            <strong>{t(relatedEntityId ? "关联图谱暂无节点" : "关系网暂无节点")}</strong>
           </div>
         )}
         </div>
@@ -729,7 +749,7 @@ export default function GraphView({
               }}
             >
               <Network size={14} />
-              显示关联图谱
+              {t("显示关联图谱")}
             </button>
             <button
               className="danger-menu-item"
@@ -742,7 +762,7 @@ export default function GraphView({
               }}
             >
               <Trash2 size={14} />
-              删除词条
+              {t("删除词条")}
             </button>
           </motion.div>
         )}

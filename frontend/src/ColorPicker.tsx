@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { glassSlide } from "./glassMotion";
+import { translate, type Language } from "./i18n";
 
 const PRESETS = [
   "#8B5CF6",
@@ -22,18 +23,23 @@ const PRESETS = [
 export default function ColorPicker({
   value,
   disabled,
+  language,
   onChange,
 }: {
   value: string;
   disabled: boolean;
+  language: Language;
   onChange: (value: string) => void;
 }) {
   const [position, setPosition] = useState<{
     right: number;
     top?: number;
     bottom?: number;
+    maxHeight: number;
   } | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [hexInput, setHexInput] = useState<string | null>(null);
+  const openedColor = useRef(value);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const selection = /^#[0-9a-f]{6}$/i.test(value) ? value : "#7C3AED";
@@ -43,6 +49,9 @@ export default function ColorPicker({
   const [hue, saturation, brightness] = toHsv(rgb);
   const angle = (hue * Math.PI) / 180;
   const open = Boolean(position && !disabled);
+  const t = (key: string) => translate(language, key);
+  const hex = (hexInput ?? selection).trim().replace(/^#/, "");
+  const validHex = /^[0-9a-f]{6}$/i.test(hex);
 
   useEffect(() => {
     if (!open) return;
@@ -83,9 +92,14 @@ export default function ColorPicker({
     const bounds = trigger.current?.getBoundingClientRect();
     if (!bounds) return;
     setExpanded(false);
+    setHexInput(null);
+    openedColor.current = selection;
+    const below = window.innerHeight - bounds.bottom;
+    const above = below < 420 && bounds.top > below;
     setPosition({
       right: Math.max(8, window.innerWidth - bounds.right),
-      ...(bounds.bottom + 365 > window.innerHeight && bounds.top > 360
+      maxHeight: (above ? bounds.top : below) - 15,
+      ...(above
         ? { bottom: window.innerHeight - bounds.top + 7 }
         : { top: bounds.bottom + 7 }),
     });
@@ -96,6 +110,7 @@ export default function ColorPicker({
     const dx = (event.clientX - bounds.left) / bounds.width - 0.5;
     const dy = (event.clientY - bounds.top) / bounds.height - 0.5;
     const hue = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+    setHexInput(null);
     onChange(
       fromHsv(
         hue,
@@ -112,7 +127,8 @@ export default function ColorPicker({
         ref={trigger}
         type="button"
         className="color-picker-trigger"
-        title="选择词条颜色"
+        title={t("选择词条颜色")}
+        aria-label={t("选择词条颜色")}
         aria-expanded={open}
         disabled={disabled}
         onClick={toggle}
@@ -133,19 +149,19 @@ export default function ColorPicker({
                 {...glassSlide(4)}
                 transition={{ duration: 0.16 }}
               >
-                <div className="color-picker-heading">预设色板</div>
+                <div className="color-picker-heading">{t("预设色板")}</div>
                 <div className="color-swatches">
                   {PRESETS.map((color) => (
                     <button
                       key={color}
                       type="button"
                       title={color}
-                      aria-label={"选择 " + color}
+                      aria-label={`${t("选择")} ${color}`}
                       aria-pressed={
                         color.toLowerCase() === selection.toLowerCase()
                       }
                       style={{ "--swatch": color } as React.CSSProperties}
-                      onClick={() => onChange(color)}
+                      onClick={() => { setHexInput(null); onChange(color); }}
                     >
                       {color.toLowerCase() === selection.toLowerCase() && (
                         <Check size={11} />
@@ -159,7 +175,7 @@ export default function ColorPicker({
                   aria-expanded={expanded}
                   onClick={() => setExpanded((current) => !current)}
                 >
-                  <span>RGB 色轮</span>
+                  <span>{t("自定义颜色")}</span>
                   <ChevronDown size={13} />
                 </button>
                 <AnimatePresence initial={false}>
@@ -171,10 +187,11 @@ export default function ColorPicker({
                       exit={{ height: 0, opacity: 0 }}
                       transition={{ duration: 0.18 }}
                     >
+                      <div className="color-picker-heading">{t("RGB 色轮")}</div>
                       <div
                         className="color-wheel"
                         role="slider"
-                        aria-label="色相"
+                        aria-label={t("色相")}
                         aria-valuemin={0}
                         aria-valuemax={359}
                         aria-valuenow={Math.floor(hue)}
@@ -191,6 +208,7 @@ export default function ColorPicker({
                         onKeyDown={(event) => {
                           if (!event.key.startsWith("Arrow")) return;
                           event.preventDefault();
+                          setHexInput(null);
                           const delta =
                             event.key === "ArrowLeft" ||
                             event.key === "ArrowDown"
@@ -214,35 +232,35 @@ export default function ColorPicker({
                         />
                       </div>
                       <label className="wheel-brightness">
-                        亮度
+                        {t("亮度")}
                         <input
                           type="range"
-                          aria-label="亮度"
                           min={0}
                           max={100}
                           value={Math.round(brightness * 100)}
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            setHexInput(null);
                             onChange(
                               fromHsv(
                                 hue,
                                 saturation,
                                 Number(event.target.value) / 100,
                               ),
-                            )
-                          }
+                            );
+                          }}
                         />
                       </label>
                       <div className="rgb-channels">
-                        {["R", "G", "B"].map((channel, index) => (
+                        {["红", "绿", "蓝"].map((channel, index) => (
                           <label key={channel}>
-                            {channel}
+                            {t(channel)}
                             <input
                               type="number"
-                              aria-label={channel}
                               min={0}
                               max={255}
                               value={rgb[index]}
                               onChange={(event) => {
+                                setHexInput(null);
                                 const channelValue = Math.min(
                                   255,
                                   Math.max(0, Number(event.target.value)),
@@ -258,6 +276,28 @@ export default function ColorPicker({
                             />
                           </label>
                         ))}
+                      </div>
+                      <div className="rgb-channels color-hex">
+                        <label>
+                          {t("十六进制")}
+                          <input value={hexInput ?? selection.toUpperCase()}
+                            onChange={(event) => setHexInput(event.target.value)}
+                            aria-invalid={!validHex}
+                            title={t("请输入六位十六进制颜色值")}
+                            spellCheck={false} />
+                        </label>
+                      </div>
+                      <div className="color-picker-actions">
+                        <button type="button" className="secondary-button" onClick={() => {
+                          setHexInput(null);
+                          onChange(openedColor.current);
+                        }}>{t("重置")}</button>
+                        <button type="button" className="primary-button" disabled={!validHex}
+                          onClick={() => {
+                            if (hexInput !== null) onChange(`#${hex.toUpperCase()}`);
+                            setPosition(null);
+                            trigger.current?.focus();
+                          }}>{t("确认")}</button>
                       </div>
                     </motion.div>
                   )}

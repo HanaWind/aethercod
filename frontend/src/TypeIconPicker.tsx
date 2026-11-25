@@ -38,6 +38,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { glassSlide } from "./glassMotion";
+import { translate, type Language } from "./i18n";
 
 const GROUPS: Array<{
   label: string;
@@ -125,10 +126,12 @@ export function getTypeIcon(name: string): LucideIcon | undefined {
 
 export default function TypeIconPicker({
   value,
+  language,
   onChange,
   disabled = false,
 }: {
   value: string;
+  language: Language;
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
@@ -139,10 +142,22 @@ export default function TypeIconPicker({
     top?: number;
     bottom?: number;
   } | null>(null);
+  const [query, setQuery] = useState("");
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const open = Boolean(position && !disabled);
   const SelectedIcon = getTypeIcon(value);
+  const t = (key: string) => translate(language, key);
+  const title = t("选择类型图标");
+  const term = query.trim().toLocaleLowerCase();
+  const visibleGroups = GROUPS.map((group) => ({
+    ...group,
+    choices: group.choices.filter(({ name, label }) =>
+      [name, label, t(label), group.label, t(group.label)]
+        .some((text) => text.toLocaleLowerCase().includes(term)),
+    ),
+  })).filter((group) => group.choices.length);
+  const selectedChoice = GROUPS.flatMap((group) => group.choices).find((choice) => choice.name === value);
 
   useEffect(() => {
     if (!open) return;
@@ -152,18 +167,21 @@ export default function TypeIconPicker({
         setPosition(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPosition(null);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPosition(null);
+      root.current?.querySelector("button")?.focus();
     };
     const closeWhenAnchorMoves = (event: Event) => {
       if (!(event.target instanceof Node && menu.current?.contains(event.target))) setPosition(null);
     };
     window.addEventListener("pointerdown", closeOutside);
-    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", closeOnEscape, true);
     window.addEventListener("scroll", closeWhenAnchorMoves, true);
     window.addEventListener("resize", closeWhenAnchorMoves);
     return () => {
       window.removeEventListener("pointerdown", closeOutside);
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", closeOnEscape, true);
       window.removeEventListener("scroll", closeWhenAnchorMoves, true);
       window.removeEventListener("resize", closeWhenAnchorMoves);
     };
@@ -176,7 +194,7 @@ export default function TypeIconPicker({
       <button
         type="button"
         className="type-icon-trigger"
-        aria-label="选择类型图标"
+        aria-label={title}
         aria-expanded={open}
         disabled={disabled}
         onClick={(event) => {
@@ -185,6 +203,7 @@ export default function TypeIconPicker({
             return;
           }
           const bounds = event.currentTarget.getBoundingClientRect();
+          setQuery("");
           const width = Math.min(Math.max(220, bounds.width), window.innerWidth - 16);
           const below = window.innerHeight - bounds.bottom;
           const above = below < 256 && bounds.top > below;
@@ -197,7 +216,7 @@ export default function TypeIconPicker({
         }}
       >
         {SelectedIcon ? <SelectedIcon size={16} /> : <span>{value || "✦"}</span>}
-        <span>{SelectedIcon ? value : "自定义符号"}</span>
+        <span>{selectedChoice ? t(selectedChoice.label) : t("自定义符号")}</span>
       </button>
       {shell && createPortal(
       <AnimatePresence initial={false}>
@@ -205,25 +224,36 @@ export default function TypeIconPicker({
           <motion.div
             className="type-icon-menu glass-menu"
             ref={menu}
+            role="dialog"
+            aria-label={title}
             style={position!}
             {...glassSlide(position?.bottom ? 4 : -4)}
             onMouseDown={(event) => event.stopPropagation()}
             transition={{ duration: 0.15 }}
           >
-            {GROUPS.map((group) => (
+            <header className="type-icon-search">
+              <strong>{title}</strong>
+              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.preventDefault();
+                }}
+                placeholder={t("搜索图标…")} aria-label={t("搜索图标…")} />
+            </header>
+            {visibleGroups.map((group) => (
               <section key={group.label}>
-                <h3>{group.label}</h3>
+                <h3>{t(group.label)}</h3>
                 <div className="type-icon-options">
                   {group.choices.map(({ name, label, Icon }) => (
                     <button
                       key={name}
                       type="button"
-                      aria-label={label}
+                      aria-label={t(label)}
                       aria-pressed={value === name}
-                      title={label}
+                      title={t(label)}
                       onClick={() => {
                         onChange(name);
                         setPosition(null);
+                        root.current?.querySelector("button")?.focus();
                       }}
                     >
                       <Icon size={17} />
@@ -232,6 +262,7 @@ export default function TypeIconPicker({
                 </div>
               </section>
             ))}
+            {!visibleGroups.length && <p role="status">{t("没有匹配的图标")}</p>}
           </motion.div>
         )}
       </AnimatePresence>, shell)}

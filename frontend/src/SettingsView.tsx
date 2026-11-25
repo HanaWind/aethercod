@@ -681,6 +681,7 @@ export default function SettingsView({
               />
               <TypeIconPicker
                 value={newTypeIcon}
+                language={language}
                 onChange={setNewTypeIcon}
                 disabled={!state.writable}
               />
@@ -767,6 +768,7 @@ export default function SettingsView({
                       {translate(language, "图标")}
                       <TypeIconPicker
                         value={typeIcon}
+                        language={language}
                         onChange={setTypeIcon}
                         disabled={!state.writable}
                       />
