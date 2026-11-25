@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { glassSlide } from "./glassMotion";
 
 type Option = { value: string; label: string };
 type Selection =
@@ -119,13 +120,7 @@ export default function Dropdown(
                 aria-label={label}
                 className="glass-menu dropdown-menu"
                 style={position!}
-                initial={{
-                  opacity: 0,
-                  scale: 0.96,
-                  y: position?.bottom ? 5 : -5,
-                }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.97, y: position?.bottom ? 3 : -3 }}
+                {...glassSlide(position?.bottom ? 5 : -5)}
                 transition={{ duration: 0.16 }}
                 onKeyDown={(event) => {
                   if (event.key === "Escape" || event.key === "Tab") {

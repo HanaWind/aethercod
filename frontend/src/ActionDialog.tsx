@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { CircleAlert } from "lucide-react";
 import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { glassFade, glassSlide } from "./glassMotion";
 
 type Request = {
   title: string;
@@ -47,9 +48,7 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
             {dialog && (
               <motion.div
                 className="modal-scrim"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                {...glassFade}
                 onMouseDown={() => close(null)}
               >
                 <motion.form
@@ -57,9 +56,7 @@ export function ActionDialogProvider({ children }: { children: ReactNode }) {
                   aria-modal="true"
                   aria-label={dialog.title}
                   className="create-dialog action-dialog"
-                  initial={{ scale: 0.96 }}
-                  animate={{ scale: 1 }}
-                  exit={{ scale: 0.97 }}
+                  {...glassSlide(8)}
                   onMouseDown={(event) => event.stopPropagation()}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") close(null);

@@ -36,6 +36,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { glassSlide } from "./glassMotion";
 
 const GROUPS: Array<{
   label: string;
@@ -130,26 +132,44 @@ export default function TypeIconPicker({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    width: number;
+    maxHeight: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const open = Boolean(position && !disabled);
   const SelectedIcon = getTypeIcon(value);
 
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !root.current?.contains(event.target))
-        setOpen(false);
+      if (event.target instanceof Node && !root.current?.contains(event.target) &&
+        !menu.current?.contains(event.target))
+        setPosition(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") setPosition(null);
+    };
+    const closeWhenAnchorMoves = (event: Event) => {
+      if (!(event.target instanceof Node && menu.current?.contains(event.target))) setPosition(null);
     };
     window.addEventListener("pointerdown", closeOutside);
     window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeWhenAnchorMoves, true);
+    window.addEventListener("resize", closeWhenAnchorMoves);
     return () => {
       window.removeEventListener("pointerdown", closeOutside);
       window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeWhenAnchorMoves, true);
+      window.removeEventListener("resize", closeWhenAnchorMoves);
     };
   }, [open]);
+
+  const shell = root.current?.closest(".app-shell");
 
   return (
     <div className="type-icon-picker" ref={root}>
@@ -159,18 +179,35 @@ export default function TypeIconPicker({
         aria-label="选择类型图标"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => {
+          if (open) {
+            setPosition(null);
+            return;
+          }
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const width = Math.min(Math.max(220, bounds.width), window.innerWidth - 16);
+          const below = window.innerHeight - bounds.bottom;
+          const above = below < 256 && bounds.top > below;
+          setPosition({
+            left: Math.min(bounds.left, window.innerWidth - width - 8),
+            width,
+            maxHeight: Math.min(250, (above ? bounds.top : below) - 14),
+            ...(above ? { bottom: window.innerHeight - bounds.top + 6 } : { top: bounds.bottom + 6 }),
+          });
+        }}
       >
         {SelectedIcon ? <SelectedIcon size={16} /> : <span>{value || "✦"}</span>}
         <span>{SelectedIcon ? value : "自定义符号"}</span>
       </button>
+      {shell && createPortal(
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
             className="type-icon-menu glass-menu"
-            initial={{ opacity: 0, scale: 0.97, y: -4 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: -3 }}
+            ref={menu}
+            style={position!}
+            {...glassSlide(position?.bottom ? 4 : -4)}
+            onMouseDown={(event) => event.stopPropagation()}
             transition={{ duration: 0.15 }}
           >
             {GROUPS.map((group) => (
@@ -186,7 +223,7 @@ export default function TypeIconPicker({
                       title={label}
                       onClick={() => {
                         onChange(name);
-                        setOpen(false);
+                        setPosition(null);
                       }}
                     >
                       <Icon size={17} />
@@ -197,7 +234,7 @@ export default function TypeIconPicker({
             ))}
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>, shell)}
     </div>
   );
 }

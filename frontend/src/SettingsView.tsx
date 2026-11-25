@@ -1,8 +1,10 @@
 import { useActionDialog } from "./ActionDialog";
 import { AnimatePresence, motion } from "framer-motion";
 import Dropdown from "./Dropdown";
+import { glassFade, glassSlide } from "./glassMotion";
 import {
   ChevronDown,
+  Check,
   CirclePlus,
   Eye,
   EyeOff,
@@ -373,9 +375,7 @@ export default function SettingsView({
       <motion.div
         key={tab}
         className="settings-tab-content"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+        {...glassFade}
         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
       >
       {tab === "library" ? (
@@ -460,15 +460,21 @@ export default function SettingsView({
                 <span className="section-kicker">Language</span>
                 <h2>{language === "en" ? "Language" : "语言设置"}</h2>
               </div>
-              <Dropdown
-                label="Language"
-                value={language}
-                onChange={(next) => onLanguageChange(next as Language)}
-                options={[
-                  { value: "zh", label: "中文" },
-                  { value: "en", label: "English" },
-                ]}
-              />
+            </div>
+            <div className="save-mode-options language-options" role="group"
+              aria-label={language === "en" ? "Language" : "语言设置"}>
+              {([["zh", "中文"], ["en", "English"]] as const).map(([value, label]) => (
+                <button type="button" key={value}
+                  className={`save-mode-option ${language === value ? "selected" : ""}`}
+                  aria-pressed={language === value}
+                  onClick={() => onLanguageChange(value)}
+                >
+                  <span className="save-mode-radio" aria-hidden="true">
+                    {language === value && <Check size={10} strokeWidth={3} />}
+                  </span>
+                  <span><strong lang={value}>{label}</strong></span>
+                </button>
+              ))}
             </div>
           </section>
           <section className="settings-section save-settings-section">
@@ -921,9 +927,7 @@ export default function SettingsView({
             key={saveNotice}
             role="status"
             className="settings-save-toast glass-menu"
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 14 }}
+            {...glassSlide(18)}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">

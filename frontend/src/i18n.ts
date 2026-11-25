@@ -6,8 +6,8 @@ const baseText: Record<string, string> = {
   "提示": "Notice",
   "请先打开或新建资料库": "Open or create a library first",
   "请填写必填属性后保存词条": "Complete required properties before saving this entry",
-  "新建资料库": "New Library",
-  "打开资料库": "Open Library",
+  "新建资料库": "New",
+  "打开资料库": "Open",
   "资料库": "Library",
   "设置": "Settings",
   "资料库设置": "Library Settings",
@@ -94,7 +94,7 @@ const baseText: Record<string, string> = {
   "节点名称": "Event name",
   "删除时间节点": "Delete timeline event",
   "全部类型": "All types",
-  "当前资料库": "Current library",
+  "当前资料库": "CURRENT",
   "打开或新建资料库以浏览词条": "Open or create a library to browse entries",
   "选择资料库": "Choose a library",
   "打开或新建资料库": "Open or create a library",
@@ -312,7 +312,7 @@ const textAdditional: Record<string, string> = {
   "筛选时间线类型": "Filter timeline by type",
   "年份筛选": "Year filters",
   "无事件说明": "No event description",
-  "新建资料库": "New Library",
+  "新建资料库": "New",
 };
 
 const textUi: Record<string, string> = {
@@ -430,7 +430,7 @@ const textUi: Record<string, string> = {
   "导入 JSON": "Import JSON",
   "保存所有未保存修改（Ctrl+S）": "Save all changes (Ctrl+S)",
   "时": "Hour",
-  "打开资料库": "Open Library",
+  "打开资料库": "Open",
   "资料库设置": "Library Settings",
   "新建词条": "New Entry",
   "尚未设置分类": "No category set",

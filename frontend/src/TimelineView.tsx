@@ -5,6 +5,7 @@ import { CalendarDays, ChevronRight, ExternalLink, Filter, Network, X } from "lu
 import { useEffect, useState } from "react";
 import type { EntityType, TimelineEntry } from "./api";
 import ElasticScroll from "./ElasticScroll";
+import { glassFade, glassSlide } from "./glassMotion";
 import { displayTypeName, translate, type Language } from "./i18n";
 
 const filterTransition = { duration: 0.24, ease: [0.22, 1, 0.36, 1] } as const;
@@ -183,9 +184,7 @@ export default function TimelineView({
             className="context-menu glass-menu"
             role="menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
-            initial={{ opacity: 0, scale: 0.96, y: 4 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 3 }}
+            {...glassSlide(4)}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
@@ -208,22 +207,28 @@ export default function TimelineView({
         {selectedEvent && (
           <motion.div
             className="modal-scrim timeline-event-scrim"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            {...glassFade}
+            transition={{ duration: 0.1, ease: "easeOut" }}
             onMouseDown={() => setSelectedEvent(null)}
-          >
-            <motion.section
-              className="timeline-event-dialog glass-menu"
+          />
+        )}
+      </AnimatePresence>
+      {selectedEvent && (
+        <div className="modal-scrim timeline-event-scrim timeline-event-shell">
+          <section
+              className="timeline-event-dialog"
               role="dialog"
               aria-modal="true"
               aria-label={selectedEvent.label || translate(language, "时间线事件详情")}
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 4 }}
-              transition={{ type: "spring", stiffness: 380, damping: 32 }}
-              onMouseDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setSelectedEvent(null);
+              }}
             >
+              <div className="timeline-event-glass glass-menu" aria-hidden="true" />
+              <motion.div className="timeline-event-content"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.12, ease: "easeOut" }}>
               <header>
                 <div>
                   <span className="section-kicker">{era}{translate(language, "纪年")} · {translate(language, "事件详情")}</span>
@@ -231,6 +236,7 @@ export default function TimelineView({
                 </div>
                 <button
                   className="icon-button"
+                  autoFocus
                   title={translate(language, "关闭")}
                   onClick={() => setSelectedEvent(null)}
                 >
@@ -266,10 +272,10 @@ export default function TimelineView({
                   {translate(language, "打开关联词条")}
                 </button>
               </footer>
-            </motion.section>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

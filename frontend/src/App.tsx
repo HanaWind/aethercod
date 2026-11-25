@@ -53,6 +53,7 @@ import {
 } from "./api";
 import ColorPicker from "./ColorPicker";
 import AmbientParticles from "./AmbientParticles";
+import { glassFade, glassSlide } from "./glassMotion";
 import Dropdown from "./Dropdown";
 import { formatWorldDate } from "./worldDate";
 import GraphView from "./GraphView";
@@ -163,6 +164,7 @@ function Workspace({
     localStorage.getItem("aethercod-theme") === "dark" ? "dark" : "light",
   );
   const [selectedId, setSelectedId] = useState("");
+  const [loadingEntry, setLoadingEntry] = useState(false);
   const [draft, setDraft] = useState<Entity | null>(null);
   const [activeTypeId, setActiveTypeId] = useState("");
   const [openTypeIds, setOpenTypeIds] = useState<Record<string, boolean>>({});
@@ -171,6 +173,7 @@ function Workspace({
   const [closing, setClosing] = useState(false);
   const [windowMaximized, setWindowMaximized] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [changingReadOnly, setChangingReadOnly] = useState(false);
   const [statusToast, setStatusToast] = useState<{
     message: string;
     kind: "success" | "error";
@@ -214,6 +217,13 @@ function Workspace({
     y: number;
   } | null>(null);
   const [showRelationForm, setShowRelationForm] = useState(false);
+  const [relationPreview, setRelationPreview] = useState<{
+    entityId: string;
+    name: string;
+    summary: string;
+    left: number;
+    bottom: number;
+  } | null>(null);
   const [relationValues, setRelationValues] = useState({
     target_id: "",
     label: "",
@@ -229,8 +239,9 @@ function Workspace({
   const [revision, setRevision] = useState(0);
   const revisionRef = useRef(0);
   const projectPath = useRef<string | undefined>(undefined);
+  const selectedEntryId = useRef("");
   const entityRequest = useRef(0);
-  const historyEntity = useRef("");
+  const modeChange = useRef(false);
   const pendingDrafts = useRef(new Map<string, { entity: Entity; version: number }>());
   const pendingSaves = useRef(
     new Map<string, { promise: Promise<void>; version: number }>(),
@@ -286,38 +297,45 @@ function Workspace({
     return () => window.removeEventListener("resize", resize);
   }, []);
 
+  const changeSelection = useCallback((id: string, entity: Entity | null = null) => {
+    entityRequest.current += 1;
+    selectedEntryId.current = id;
+    setSelectedId(id);
+    setLoadingEntry(Boolean(id && !entity));
+    setDraft(entity);
+    setTimeline([]);
+    setHistory([]);
+    setCategoryEditing(false);
+    setRelationPreview(null);
+    setShowRelationForm(false);
+    setRelationValues({ target_id: "", label: "", reverse_label: "" });
+    setNewDate({ label: "", year: "", date_value: null, precision: "year", description: "" });
+  }, []);
+
   const syncState = useCallback((next: ProjectState) => {
     setState(next);
     const path = next.project?.path;
     if (path !== projectPath.current || !next.project) {
       projectPath.current = path;
-      entityRequest.current += 1;
       pendingDrafts.current.clear();
       pendingSaves.current.clear();
       setDirty(false);
       setOpenTypeIds({});
       setActiveTypeId("");
-      setSelectedId("");
-      setDraft(null);
-      setTimeline([]);
+      changeSelection("");
       setGlobalTimeline([]);
       setGraph({ nodes: [], edges: [] });
       setGraphFilterIds([]);
       setRelatedGraphId("");
-      setHistory([]);
-      historyEntity.current = "";
       setActiveView("entries");
-    } else {
-      setSelectedId((current) =>
-        next.entities.some((entity) => entity.id === current) ? current : "",
-      );
-      setDraft((current) =>
-        current && !next.entities.some((entity) => entity.id === current.id)
-          ? null
-          : current,
-      );
+    } else if (
+      selectedEntryId.current &&
+      !pendingDrafts.current.has(selectedEntryId.current) &&
+      !next.entities.some((entity) => entity.id === selectedEntryId.current)
+    ) {
+      changeSelection("");
     }
-  }, []);
+  }, [changeSelection]);
 
   useEffect(() => {
     const api = desktopApi();
@@ -340,28 +358,40 @@ function Workspace({
 
   const loadEntity = useCallback(async (id: string, reveal = true) => {
     const api = desktopApi();
-    if (!api) return;
-    const request = ++entityRequest.current;
-    const [entity, events, versions] = await Promise.all([
-      api.get_entity(id),
-      api.get_timeline(id),
-      api.get_history(id),
-    ]);
-    if (request !== entityRequest.current) return;
-    if (reveal) setActiveView("entries");
-    setSelectedId(id);
-    const pending = pendingDrafts.current.get(id);
-    setDraft(pending?.entity ?? entity);
-    if (entity && reveal) {
-      setActiveTypeId(entity.type_id);
-      setOpenTypeIds((current) => ({ ...current, [entity.type_id]: true }));
+    if (!api || !projectPath.current || closeInProgress.current) return;
+    if (reveal) {
+      if (id !== selectedEntryId.current) changeSelection(id);
+      setActiveView("entries");
+      setError("");
+    } else if (id !== selectedEntryId.current) {
+      return;
     }
-    setDirty(pendingDrafts.current.size > 0);
-    setShowRelationForm(false);
-    setTimeline(events);
-    setHistory(versions);
-    historyEntity.current = id;
-  }, []);
+    const request = ++entityRequest.current;
+    const isCurrent = () => request === entityRequest.current && id === selectedEntryId.current;
+    try {
+      const entity = await api.get_entity(id);
+      if (!isCurrent()) return;
+      const current = pendingDrafts.current.get(id)?.entity ?? entity;
+      setDraft(current);
+      if (current && reveal) {
+        setActiveTypeId(current.type_id);
+        setOpenTypeIds((types) => ({ ...types, [current.type_id]: true }));
+      }
+      setLoadingEntry(false);
+      if (!current) return;
+      const [events, versions] = await Promise.allSettled([
+        api.get_timeline(id),
+        api.get_history(id),
+      ]);
+      if (!isCurrent()) return;
+      if (events.status === "fulfilled") setTimeline(events.value);
+      if (versions.status === "fulfilled") setHistory(versions.value);
+    } catch (reason) {
+      if (!isCurrent()) return;
+      setLoadingEntry(false);
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [changeSelection]);
 
   const flushDraft = useCallback(async () => {
     const api = desktopApi();
@@ -388,30 +418,16 @@ function Workspace({
             }));
             if (pendingDrafts.current.get(entityId)?.version === change.version) {
               pendingDrafts.current.delete(entityId);
-              if (selectedId === saved.id) setDraft(saved);
+              if (selectedEntryId.current === saved.id) setDraft(saved);
               setDirty(pendingDrafts.current.size > 0);
-              setTimeline(
-                saved.dates.map((date) => ({
-                  id: date.id ?? "",
-                  entity_id: saved.id,
-                  name: saved.name,
-                  type_id: saved.type_id,
-                  date_kind: date.date_kind,
-                  label: date.label ?? "",
-                  description: date.description ?? "",
-                  year: date.year ?? null,
-                  date_value: date.date_value ?? null,
-                  precision: date.precision ?? "exact",
-                  end_year: date.end_year ?? null,
-                  end_date_value: date.end_date_value ?? null,
-                })),
-              );
             }
-            setError("");
-            if (historyEntity.current === saved.id)
-              setHistory(await api.get_history(saved.id));
+            if (selectedEntryId.current === saved.id) {
+              setError("");
+              void loadEntity(saved.id, false);
+            }
           })
           .finally(() => {
+            if (projectPath.current !== path) return;
             pendingSaves.current.delete(entityId);
             setSaving(false);
           });
@@ -431,7 +447,7 @@ function Workspace({
       }
     }
     return true;
-  }, [selectedId]);
+  }, [loadEntity]);
 
   const requestClose = useCallback(async (target: "project" | "window") => {
     const api = desktopApi();
@@ -512,23 +528,34 @@ function Workspace({
   const refreshProject = useCallback(async () => {
     const api = desktopApi();
     if (!api) return;
+    const path = projectPath.current;
     const next = await api.get_state();
+    if (projectPath.current !== path || next.project?.path !== path) return;
     syncState(next);
-    if (selectedId && next.entities.some((entity) => entity.id === selectedId))
-      await loadEntity(selectedId, false);
-  }, [loadEntity, selectedId, syncState]);
+    const id = selectedEntryId.current;
+    if (next.entities.some((entity) => entity.id === id)) await loadEntity(id, false);
+  }, [loadEntity, syncState]);
 
   const toggleReadOnly = async () => {
     const api = desktopApi();
-    if (!api) return;
+    const path = projectPath.current;
+    if (!api || !path || modeChange.current) return;
+    modeChange.current = true;
+    setChangingReadOnly(true);
     try {
       if (!state.read_only && !(await flushDraft())) return;
-      setShowRelationForm(false);
+      if (projectPath.current !== path || closeInProgress.current) return;
       const next = await api.set_read_only(!state.read_only);
-      syncState(next);
+      if (projectPath.current !== path || next.project?.path !== path) return;
+      setShowRelationForm(false);
+      setCategoryEditing(false);
+      setState((current) => ({ ...current, writable: next.writable, read_only: next.read_only }));
       showStatusToast(next.read_only ? "已切换至只读模式" : "已切换至编辑模式", "success");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      modeChange.current = false;
+      setChangingReadOnly(false);
     }
   };
 
@@ -581,8 +608,8 @@ function Workspace({
       syncState(next);
       setGraph(await api.get_graph());
       setGlobalTimeline(await api.get_timeline());
-      if (selectedId && next.entities.some((entity) => entity.id === selectedId))
-        await loadEntity(selectedId, false);
+      const id = selectedEntryId.current;
+      if (next.entities.some((entity) => entity.id === id)) await loadEntity(id, false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -706,7 +733,7 @@ function Workspace({
             item.id === saved.id ? saved : item,
           ),
         }));
-        if (selectedId === saved.id) setDraft(saved);
+        void loadEntity(saved.id, false);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -714,11 +741,9 @@ function Workspace({
   };
 
   useEffect(() => {
-    if (selectedId || !state.entities.length || activeView !== "entries")
+    if (selectedEntryId.current || !state.entities.length || activeView !== "entries")
       return;
-    void loadEntity(state.entities[0].id).catch((reason: Error) =>
-      setError(reason.message),
-    );
+    void loadEntity(state.entities[0].id);
   }, [activeView, state.entities, loadEntity, selectedId]);
 
   useEffect(() => {
@@ -806,7 +831,7 @@ function Workspace({
 
   const updateDraft = (update: (current: Entity) => Entity) => {
     const current = (draft && pendingDrafts.current.get(draft.id)?.entity) ?? draft;
-    if (!current || !state.writable) return;
+    if (!current || current.id !== selectedEntryId.current || !state.writable) return;
     const entity = update(current);
     const version = ++revisionRef.current;
     pendingDrafts.current.set(entity.id, { entity, version });
@@ -815,48 +840,20 @@ function Workspace({
     setDirty(true);
   };
 
-  const selectEntity = async (entity: EntitySummary) => {
-    try {
-      await loadEntity(entity.id);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
+  const selectEntity = (entity: EntitySummary) => loadEntity(entity.id);
 
   const selectById = (id: string) => {
-    const entity = state.entities.find((item) => item.id === id);
-    if (entity) void selectEntity(entity);
+    void loadEntity(id);
   };
 
   const changeWindow = async (action: "minimize" | "maximize") => {
     const api = desktopApi();
     if (!api) return;
-    const workspace = document.querySelector(".workspace");
-    let animation: Animation | undefined;
     try {
-      if (workspace && motionEnabled) {
-        animation = workspace.animate(
-          [
-            { transform: "scale(1)", opacity: 1 },
-            {
-              transform: action === "minimize" ? "scale(0.96)" : "scale(0.984)",
-              opacity: action === "minimize" ? 0.25 : 0.83,
-            },
-          ],
-          { duration: 150, easing: "ease-in-out", fill: "forwards" },
-        );
-        await animation.finished;
-      }
       await api.window_action(action);
       if (action === "maximize") await refreshWindowState();
-      if (action === "maximize" && animation) {
-        animation.reverse();
-        await animation.finished;
-      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      animation?.cancel();
     }
   };
 
@@ -907,8 +904,11 @@ function Workspace({
   const createEntity = async (type: EntityType) => {
     const api = desktopApi();
     if (!api || !state.writable) return;
+    const path = projectPath.current;
+    const previouslySelected = selectedEntryId.current;
     try {
       const entity = await api.create_entity(type.id);
+      if (projectPath.current !== path) return;
       entity.name = `未命名${type.name}`;
       const missingRequired = entity.fields?.some(
         (field) =>
@@ -916,26 +916,16 @@ function Workspace({
           (entity.custom_fields[field.name] === undefined ||
             entity.custom_fields[field.name] === ""),
       );
-    if (missingRequired) {
-        const version = ++revisionRef.current;
-        setRevision(version);
-        pendingDrafts.current.set(entity.id, { entity, version });
-        setSelectedId(entity.id);
-        setDraft(entity);
-        setActiveView("entries");
-        setTimeline([]);
-        setDirty(true);
-        setError(translate(language, "请填写必填属性后保存词条"));
-      } else {
-        const version = ++revisionRef.current;
-        setRevision(version);
-        pendingDrafts.current.set(entity.id, { entity, version });
-        setSelectedId(entity.id);
-        setDraft(entity);
-        setActiveView("entries");
-        setTimeline([]);
-        setDirty(true);
-      }
+      if (selectedEntryId.current !== previouslySelected) return;
+      const version = ++revisionRef.current;
+      setRevision(version);
+      pendingDrafts.current.set(entity.id, { entity, version });
+      changeSelection(entity.id, entity);
+      setActiveTypeId(entity.type_id);
+      setOpenTypeIds((types) => ({ ...types, [entity.type_id]: true }));
+      setActiveView("entries");
+      setDirty(true);
+      if (missingRequired) setError(translate(language, "请填写必填属性后保存词条"));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -974,10 +964,11 @@ function Workspace({
         label: relationValues.label.trim(),
         reverse_label: relationValues.reverse_label.trim(),
       });
-      const refreshed = await desktopApi()?.get_entity(draft.id);
-      if (refreshed) setDraft(refreshed);
-      setRelationValues({ target_id: "", label: "", reverse_label: "" });
-      setShowRelationForm(false);
+      if (selectedEntryId.current === draft.id) {
+        setRelationValues({ target_id: "", label: "", reverse_label: "" });
+        setShowRelationForm(false);
+        await loadEntity(draft.id, false);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -998,8 +989,7 @@ function Workspace({
       return;
     try {
       await desktopApi()?.delete_relation(relationId);
-      const refreshed = await desktopApi()?.get_entity(draft.id);
-      if (refreshed) setDraft(refreshed);
+      await loadEntity(draft.id, false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -1017,21 +1007,15 @@ function Workspace({
     )
       return;
     try {
-      if (selectedId === entityId) {
-        pendingDrafts.current.delete(entityId);
-        setDirty(pendingDrafts.current.size > 0);
-        await pendingSaves.current.get(entityId)?.promise.catch(() => undefined);
-      }
+      pendingDrafts.current.delete(entityId);
+      setDirty(pendingDrafts.current.size > 0);
+      await pendingSaves.current.get(entityId)?.promise.catch(() => undefined);
       await desktopApi()?.delete_entity(entityId);
       setState((current) => ({
         ...current,
         entities: current.entities.filter((entity) => entity.id !== entityId),
       }));
-      if (selectedId === entityId) {
-        setSelectedId("");
-        setDraft(null);
-        setTimeline([]);
-      }
+      if (selectedEntryId.current === entityId) changeSelection("");
       if (activeView === "timeline")
         setGlobalTimeline((await desktopApi()?.get_timeline()) ?? []);
       if (activeView === "graph")
@@ -1079,11 +1063,7 @@ function Workspace({
         ...current,
         entities: current.entities.filter((entity) => entity.id !== entityId),
       }));
-      if (selectedId === entityId) {
-        setSelectedId("");
-        setDraft(null);
-        setTimeline([]);
-      }
+      if (selectedEntryId.current === entityId) changeSelection("");
       const api = desktopApi();
       if (api) {
         setGraph(await api.get_graph());
@@ -1124,6 +1104,9 @@ function Workspace({
       style={{ "--accent": draft?.color || "#7C3AED" } as React.CSSProperties}
       onClick={() => contextMenu && setContextMenu(null)}
     >
+      <div className="ambient-light" aria-hidden="true">
+        <i /><i /><i />
+      </div>
       {particlesEnabled && <AmbientParticles theme={theme} />}
       <header className="titlebar pywebview-drag-region">
         <div className="brand-lockup pywebview-drag-region">
@@ -1169,6 +1152,7 @@ function Workspace({
           {state.project && (
             <button
               className={`readonly-toggle ${state.read_only ? "active" : ""}`}
+              disabled={changingReadOnly}
               title={state.read_only ? "Edit mode" : "Read-only mode"}
               onClick={() => void toggleReadOnly()}
             >
@@ -1213,9 +1197,9 @@ function Workspace({
           {sidebarOpen && (
             <motion.aside
               className="sidebar"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 258, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
+              initial={{ width: 0 }}
+              animate={{ width: 258 }}
+              exit={{ width: 0 }}
               transition={{ type: "spring", stiffness: 340, damping: 38 }}
             >
               <div className="sidebar-top">
@@ -1230,7 +1214,7 @@ function Workspace({
                     <BookOpen size={16} />
                   </div>
                   <div className="library-copy">
-                    <span className="muted-label">{translate(language, "当前资料库")}</span>
+                    <span className={`muted-label${language === "en" ? " font-bold" : ""}`}>{translate(language, "当前资料库")}</span>
                     <strong>{state.project?.name ?? translate(language, "资料库")}</strong>
                   </div>
                   <ChevronDown size={15} className="quiet-icon" />
@@ -1741,6 +1725,8 @@ function Workspace({
                 </button>
               </div>
             </section>
+          ) : loadingEntry && !draft ? (
+            <div className="empty-view" role="status">{translate(language, "正在加载")}</div>
           ) : !draft ? (
             <section className="welcome-state compact-welcome">
               <div className="welcome-glyph">
@@ -1750,14 +1736,12 @@ function Workspace({
               <p>{translate(language, "从左侧分类中打开一条设定，或创建新词条。")}</p>
             </section>
           ) : (
-            <ElasticScroll className="document-scroll">
-              <AnimatePresence mode="wait" initial={false}>
+            <ElasticScroll key={draft.id} className="document-scroll">
                 <motion.article
                   key={draft.id}
                   className="document"
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.18 }}
                 >
                   <div className="document-glow" />
@@ -1981,6 +1965,18 @@ function Workspace({
                                 key={relation.id}
                                 className="relation-pill"
                                 whileHover={{ y: -1 }}
+                                onHoverStart={(event) => {
+                                  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                                  setRelationPreview({
+                                    entityId: draft.id,
+                                    name: relation.other_name,
+                                    summary: target?.summary ||
+                                      (targetType ? displayTypeName(language, targetType) : translate(language, "词条")),
+                                    left: Math.min(bounds.left, window.innerWidth - 248),
+                                    bottom: window.innerHeight - bounds.top + 7,
+                                  });
+                                }}
+                                onHoverEnd={() => setRelationPreview(null)}
                                 onClick={() => {
                                   if (target) void selectEntity(target);
                                 }}
@@ -1994,13 +1990,6 @@ function Workspace({
                                 <span>{relation.other_name}</span>
                                 <span className="relation-label">
                                   {relation.display_label}
-                                </span>
-                                <span className="relation-preview">
-                                  <strong>{relation.other_name}</strong>
-                                  <small>
-                                    {target?.summary ||
-                                      (targetType ? displayTypeName(language, targetType) : translate(language, "词条"))}
-                                  </small>
                                 </span>
                                 {state.writable && (
                                   <span
@@ -2246,7 +2235,6 @@ function Workspace({
                     </footer>
                   </motion.div>
                 </motion.article>
-              </AnimatePresence>
             </ElasticScroll>
           )}
         </main>
@@ -2258,9 +2246,9 @@ function Workspace({
             draft && (
               <motion.aside
                 className="inspector"
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 254, opacity: 1 }}
-                exit={{ width: 0, opacity: 0 }}
+                initial={{ width: 0 }}
+                animate={{ width: 254 }}
+                exit={{ width: 0 }}
                 transition={{ type: "spring", stiffness: 340, damping: 38 }}
               >
                 <div className="inspector-header">
@@ -2414,9 +2402,7 @@ function Workspace({
           <motion.div
             className="context-menu glass-menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
-            initial={{ opacity: 0, scale: 0.96, y: 3 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 2 }}
+            {...glassSlide(3)}
             transition={{ duration: 0.14 }}
             onClick={(event) => {
               event.stopPropagation();
@@ -2542,16 +2528,12 @@ function Workspace({
         {paletteOpen && (
           <motion.div
             className="modal-scrim"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            {...glassFade}
             onMouseDown={() => setPaletteOpen(false)}
           >
             <motion.div
               className="command-palette"
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 4 }}
+              {...glassSlide(8)}
               transition={{ type: "spring", stiffness: 420, damping: 34 }}
               onMouseDown={(event) => event.stopPropagation()}
             >
@@ -2630,17 +2612,13 @@ function Workspace({
         {typeCreateOpen && (
           <motion.div
             className="modal-scrim"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            {...glassFade}
             onMouseDown={() => setTypeCreateOpen(false)}
           >
             <motion.form
               className="create-dialog"
               onSubmit={(event) => void submitCreateType(event)}
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
+              {...glassSlide(8)}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="dialog-heading">
@@ -2707,17 +2685,13 @@ function Workspace({
         {createOpen && (
           <motion.div
             className="modal-scrim"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            {...glassFade}
             onMouseDown={() => setCreateOpen(false)}
           >
             <motion.form
               className="create-dialog"
               onSubmit={(event) => void createProject(event)}
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
+              {...glassSlide(8)}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="dialog-heading">
@@ -2807,14 +2781,23 @@ function Workspace({
         )}
       </AnimatePresence>
       <AnimatePresence>
+        {relationPreview && activeView === "entries" && relationPreview.entityId === draft?.id && (
+          <motion.div className="relation-preview" {...glassSlide(3)}
+            transition={{ duration: 0.14 }}
+            style={{ left: relationPreview.left, bottom: relationPreview.bottom }}
+          >
+            <strong>{relationPreview.name}</strong>
+            <small>{relationPreview.summary}</small>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
         {statusToast && (
           <motion.div
             key={statusToast.key}
             className={`status-toast glass-menu ${statusToast.kind}`}
             role="status"
-            initial={{ opacity: 0, y: 18, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 14, scale: 0.98 }}
+            {...glassSlide(18)}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3377,9 +3360,7 @@ function EditableText({
                 role="listbox"
                 aria-label={translate(language, "词条引用候选")}
                 style={{ left: completion.x, top: completion.y }}
-                initial={{ opacity: 0, scale: 0.97, y: 4 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.98, y: 2 }}
+                {...glassSlide(4)}
                 transition={{ duration: 0.14 }}
                 onMouseDown={(event) => event.preventDefault()}
               >

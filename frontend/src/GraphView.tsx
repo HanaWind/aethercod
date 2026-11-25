@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { animate, AnimatePresence, motion } from "framer-motion";
 import {
   Maximize2,
   Network,
@@ -11,6 +11,7 @@ import {
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +20,7 @@ import {
 } from "react";
 import type { EntitySummary, EntityType, GraphData, GraphNode } from "./api";
 import { initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius } from "./graphLayout";
+import { glassFade, glassSlide } from "./glassMotion";
 
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.2;
@@ -66,6 +68,9 @@ export default function GraphView({
     Record<string, { x: number; y: number }>
   >({});
   const [zoom, setZoom] = useState(1);
+  const [renderedZoom, setRenderedZoom] = useState(1);
+  const zoomFrame = useRef(1);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [centeredNodeId, setCenteredNodeId] = useState("");
   const [focusPositions, setFocusPositions] = useState<Record<string, Point>>({});
   const [nodeMenu, setNodeMenu] = useState<NodeMenu>(null);
@@ -83,12 +88,45 @@ export default function GraphView({
   const displayedFocus = useRef<Record<string, Point>>({});
   const positionAnimation = useRef(0);
   const canvas = useRef<HTMLDivElement>(null);
+  const viewportElement = useRef<HTMLDivElement>(null);
   const scene = useRef<SVGGElement>(null);
   const lineMaskId = useId();
   const { nodes: initialNodes, width: WIDTH, height: HEIGHT } = useMemo(
     () => initializeGraphLayout(graph.nodes),
     [graph.nodes],
   );
+  const viewScale = Math.min(viewport.width / WIDTH, viewport.height / HEIGHT);
+  const nodeScale = viewScale * renderedZoom;
+
+  useLayoutEffect(() => {
+    const element = viewportElement.current;
+    if (!element) return;
+    const measure = () => setViewport({
+      width: element.clientWidth,
+      height: element.clientHeight,
+    });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const update = (value: number) => {
+      zoomFrame.current = value;
+      setRenderedZoom(value);
+    };
+    if (!motionEnabled) {
+      update(zoom);
+      return;
+    }
+    const animation = animate(zoomFrame.current, zoom, {
+      duration: 0.16,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: update,
+    });
+    return () => animation.stop();
+  }, [motionEnabled, zoom]);
   const baseNodes = useMemo(
     () => initialNodes.map((node) => ({ ...node, ...positions[node.id] })),
     [initialNodes, positions],
@@ -182,7 +220,7 @@ export default function GraphView({
     return () => element.removeEventListener("wheel", zoomFromWheel);
   }, []);
 
-  const moveNode = (event: PointerEvent<SVGSVGElement>) => {
+  const moveNode = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
     const matrix = scene.current?.getScreenCTM();
     if (!current || !matrix) return;
@@ -540,22 +578,19 @@ export default function GraphView({
           </button>
         </div>
       </header>
-      <div className="graph-canvas-wrap" ref={canvas}>
+      <div className="graph-canvas-wrap" ref={canvas}
+        onPointerMove={moveNode} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
+        <div className="graph-viewport" ref={viewportElement}>
         {visibleGraph.nodes.length ? (
+          <>
           <svg
             className="graph-canvas"
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            role="group"
-            aria-label={relatedEntityId ? "词条关联图谱" : "词条关系网"}
-            onPointerMove={moveNode}
-            onPointerUp={finishDrag}
-            onPointerCancel={finishDrag}
+            aria-hidden="true"
           >
-            <motion.g
+            <g
               ref={scene}
-              style={{ transformBox: "view-box", transformOrigin: "center" }}
-              animate={{ scale: zoom }}
-              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              transform={`translate(${WIDTH / 2} ${HEIGHT / 2}) scale(${renderedZoom}) translate(${-WIDTH / 2} ${-HEIGHT / 2})`}
             >
               <defs>
                 {/* Cut the edges out below the glass while keeping the canvas visible. */}
@@ -608,23 +643,31 @@ export default function GraphView({
                   ))}
                 </AnimatePresence>
               </g>
+            </g>
+          </svg>
+          <div className="graph-node-layer" role="group"
+            aria-label={relatedEntityId ? "词条关联图谱" : "词条关系网"}>
               <AnimatePresence initial={false}>
                 {[...visibleGraph.nodes].sort((left, right) =>
                   Number(left.id === centeredNodeId) - Number(right.id === centeredNodeId),
                 ).map((node) => (
-                <motion.g
+                <motion.button
                   key={node.id}
-                  className="graph-node"
-                  role="button"
-                  tabIndex={0}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  type="button"
+                  className="graph-node graph-node-glass"
+                  {...glassFade}
                   transition={{ duration: 0.17 }}
                   aria-label={`${node.name}，单击居中，双击打开`}
                   aria-pressed={node.id === centeredNodeId}
-                  style={{ "--node-color": entityColors.get(node.id) ?? node.color } as CSSProperties}
-                  transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}
+                  style={{
+                    ...floatStyle(node, motionEnabled && node.id !== centeredNodeId),
+                    "--node-color": entityColors.get(node.id) ?? node.color,
+                    "--graph-scale": nodeScale,
+                    left: viewport.width / 2 + ((node.x - 0.5) * WIDTH - nodeRadius(node.name)) * nodeScale,
+                    top: viewport.height / 2 + ((node.y - 0.5) * HEIGHT - NODE_HALF_HEIGHT) * nodeScale,
+                    width: 2 * nodeRadius(node.name) * nodeScale,
+                    height: 2 * NODE_HALF_HEIGHT * nodeScale,
+                  } as CSSProperties}
                   onPointerDown={(event) => {
                     if (event.button !== 0 || !writable) return;
                     drag.current = {
@@ -645,45 +688,24 @@ export default function GraphView({
                     }
                   }}
                 >
-                  <g className="graph-node-drift"
-                    style={floatStyle(node, motionEnabled && node.id !== centeredNodeId)}>
-                    <foreignObject x={-nodeRadius(node.name)} y={-NODE_HALF_HEIGHT}
-                      width={2 * nodeRadius(node.name)} height={2 * NODE_HALF_HEIGHT}>
-                      <div className="graph-node-glass" />
-                    </foreignObject>
-                    <ellipse
-                      className="graph-node-outline"
-                      rx={nodeRadius(node.name)}
-                      ry={NODE_HALF_HEIGHT}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <circle
-                      className="graph-node-indicator"
-                      cx="-49"
-                      r="4"
-                      fill="var(--node-color)"
-                    />
-                    <text className="graph-node-name" y="-1">
-                      {node.name.length > 18
-                        ? `${node.name.slice(0, 18)}…`
-                        : node.name}
-                    </text>
-                    <text className="graph-node-type" y="17">
-                      {types.find((type) => type.id === node.type_id)?.name ??
-                        "词条"}
-                    </text>
-                  </g>
-                </motion.g>
+                  <span className="graph-node-copy">
+                    <span className="graph-node-name">{node.name}</span>
+                    <span className="graph-node-type">
+                      {types.find((type) => type.id === node.type_id)?.name ?? "词条"}
+                    </span>
+                  </span>
+                </motion.button>
               ))}
               </AnimatePresence>
-            </motion.g>
-          </svg>
+          </div>
+          </>
         ) : (
           <div className="empty-view graph-empty">
             <Network size={22} />
             <strong>{relatedEntityId ? "关联图谱暂无节点" : "关系网暂无节点"}</strong>
           </div>
         )}
+        </div>
       </div>
       <AnimatePresence>
         {nodeMenu && (
@@ -691,9 +713,7 @@ export default function GraphView({
             className="context-menu glass-menu graph-node-menu"
             role="menu"
             style={{ left: nodeMenu.x, top: nodeMenu.y }}
-            initial={{ opacity: 0, scale: 0.96, y: 3 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 2 }}
+            {...glassSlide(3)}
             transition={{ duration: 0.14 }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}

@@ -2,6 +2,7 @@ import { Check, ChevronDown, Palette } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { glassSlide } from "./glassMotion";
 
 const PRESETS = [
   "#8B5CF6",
@@ -129,9 +130,7 @@ export default function ColorPicker({
                 ref={panel}
                 className="color-picker-popover glass-menu"
                 style={position!}
-                initial={{ opacity: 0, scale: 0.96, y: 4 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.97, y: 3 }}
+                {...glassSlide(4)}
                 transition={{ duration: 0.16 }}
               >
                 <div className="color-picker-heading">预设色板</div>
