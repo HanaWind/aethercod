@@ -172,6 +172,11 @@ function Workspace({
   const [dirty, setDirty] = useState(false);
   const [closing, setClosing] = useState(false);
   const [windowMaximized, setWindowMaximized] = useState(false);
+  const windowStateRequest = useRef(0);
+  const windowActionPending = useRef(false);
+  const titlebarDrag = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const pendingWindowPosition = useRef<{ x: number; y: number } | null>(null);
+  const movingWindow = useRef(false);
   const [saving, setSaving] = useState(false);
   const [changingReadOnly, setChangingReadOnly] = useState(false);
   const [statusToast, setStatusToast] = useState<{
@@ -212,6 +217,8 @@ function Workspace({
   const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [] });
   const [graphFilterIds, setGraphFilterIds] = useState<string[]>([]);
   const [relatedGraphId, setRelatedGraphId] = useState("");
+  const graphCenterId = relatedGraphId || (graphFilterIds.length === 1 ? graphFilterIds[0] : "");
+  const sidebarSelectedId = activeView === "graph" ? graphCenterId : selectedId;
   const [contextMenu, setContextMenu] = useState<{
     kind: "type" | "entity" | "library";
     id: string;
@@ -280,8 +287,16 @@ function Workspace({
 
   const refreshWindowState = useCallback(async () => {
     const api = desktopApi();
-    if (api) setWindowMaximized(await api.window_maximized());
+    if (!api || windowActionPending.current) return;
+    const request = ++windowStateRequest.current;
+    const maximized = await api.window_maximized();
+    if (request === windowStateRequest.current) setWindowMaximized(maximized);
   }, []);
+
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle("window-maximized", windowMaximized);
+    return () => document.documentElement.classList.remove("window-maximized");
+  }, [windowMaximized]);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -601,9 +616,17 @@ function Workspace({
   };
 
   const openRelatedGraph = (id: string) => {
-    setRelatedGraphId(id);
-    setGraphFilterIds([id]);
-    void navigateTo("graph");
+    setRelatedGraphId(normalizeEntryId(id));
+    setGraphFilterIds([]);
+    if (activeView === "graph") setContextMenu(null);
+    else void navigateTo("graph");
+  };
+
+  const openCurrentRelatedGraph = async () => {
+    if (!draft) return;
+    if (state.entities.some((entity) => entity.id === draft.id) || await flushDraft()) {
+      openRelatedGraph(draft.id);
+    }
   };
 
   const toggleFavorite = () => {
@@ -886,12 +909,17 @@ function Workspace({
 
   const changeWindow = async (action: "minimize" | "maximize") => {
     const api = desktopApi();
-    if (!api) return;
+    if (!api || windowActionPending.current) return;
+    windowActionPending.current = true;
+    windowStateRequest.current++;
+    titlebarDrag.current = null;
+    pendingWindowPosition.current = null;
     try {
-      await api.window_action(action);
-      if (action === "maximize") await refreshWindowState();
+      setWindowMaximized(await api.window_action(action));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      windowActionPending.current = false;
     }
   };
 
@@ -1143,7 +1171,7 @@ function Workspace({
 
   return (
     <div
-      className={`app-shell theme-${theme}${motionEnabled ? "" : " motion-disabled"}`}
+      className={`app-shell theme-${theme}${motionEnabled ? "" : " motion-disabled"}${windowMaximized ? " window-maximized" : ""}`}
       style={{ "--accent": draft?.color || "#7C3AED" } as React.CSSProperties}
       onClick={() => contextMenu && setContextMenu(null)}
     >
@@ -1151,8 +1179,61 @@ function Workspace({
         <i /><i /><i />
       </div>
       {particlesEnabled && <AmbientParticles theme={theme} />}
-      <header className="titlebar pywebview-drag-region">
-        <div className="brand-lockup pywebview-drag-region">
+      <header className="titlebar"
+        onDoubleClick={(event) => {
+          if (event.button === 0 && !closing && event.target instanceof Element &&
+            !event.target.closest(".no-drag, button, input, textarea, select, a")) {
+            void changeWindow("maximize");
+          }
+        }}
+        onPointerDown={(event) => {
+          if (windowMaximized || windowActionPending.current || closing || !event.isPrimary || event.button !== 0 ||
+            (event.target instanceof Element && event.target.closest(".no-drag, button, input, textarea, select, a"))) return;
+          const x = event.screenX - event.clientX;
+          const y = event.screenY - event.clientY;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          // Keep the pointer's client offset while the native window moves beneath it.
+          titlebarDrag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const drag = titlebarDrag.current;
+          const api = desktopApi();
+          if (windowMaximized || closing || !drag || drag.pointerId !== event.pointerId || !api) return;
+          if (!(event.buttons & 1)) {
+            titlebarDrag.current = null;
+            pendingWindowPosition.current = null;
+            return;
+          }
+          const x = event.screenX - drag.x;
+          const y = event.screenY - drag.y;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          pendingWindowPosition.current = { x: Math.round(x), y: Math.round(y) };
+          if (movingWindow.current) return;
+          movingWindow.current = true;
+          void (async () => {
+            try {
+              while (pendingWindowPosition.current) {
+                const point = pendingWindowPosition.current;
+                pendingWindowPosition.current = null;
+                await api.move_window(point.x, point.y);
+              }
+            } catch (error) {
+              setError(error instanceof Error ? error.message : String(error));
+              pendingWindowPosition.current = null;
+            } finally {
+              movingWindow.current = false;
+            }
+          })();
+        }}
+        onLostPointerCapture={() => {
+          titlebarDrag.current = null;
+        }}
+        onPointerCancel={() => {
+          titlebarDrag.current = null;
+          pendingWindowPosition.current = null;
+        }}>
+        <div className="brand-lockup">
           <div className="brand-mark">
             <img src={brandMark} alt="" aria-hidden="true" />
           </div>
@@ -1462,8 +1543,11 @@ function Workspace({
                                 {entries.map((entity) => (
                                   <button
                                     key={entity.id}
-                                    className={`entry-nav ${selectedId === entity.id ? "selected" : ""}`}
-                                    onClick={() => void selectEntity(entity)}
+                                    className={`entry-nav ${sidebarSelectedId === entity.id ? "selected" : ""}`}
+                                    onClick={() => {
+                                      if (activeView === "graph") openRelatedGraph(entity.id);
+                                      else void selectEntity(entity);
+                                    }}
                                     onContextMenu={(event) =>
                                       openContextMenu(
                                         event,
@@ -1472,7 +1556,7 @@ function Workspace({
                                       )
                                     }
                                   >
-                                    {selectedId === entity.id && (
+                                    {sidebarSelectedId === entity.id && (
                                       <motion.span
                                         className="entry-active-bg"
                                         layoutId="entry-active-bg"
@@ -1553,7 +1637,7 @@ function Workspace({
         </AnimatePresence>
 
         <main className="main-panel">
-          <div className="toolbar">
+          {!(activeView === "graph" && state.project) && <div className="toolbar">
             <div className="breadcrumb">
               <button
                 className="icon-button"
@@ -1569,9 +1653,7 @@ function Workspace({
                     <span className="crumb-muted">
                       {activeView === "timeline"
                         ? translate(language, "时间线")
-                        : activeView === "graph"
-                          ? translate(language, relatedGraphId ? "关联图谱" : "关系网")
-                          : activeView === "favorites"
+                        : activeView === "favorites"
                             ? translate(language, "收藏夹")
                             : activeView === "settings"
                               ? translate(language, "资料库设置")
@@ -1624,15 +1706,7 @@ function Workspace({
                 <button
                   className={`toolbar-text-action ${compactWindow ? "compact" : ""}`}
                   title={translate(language, "查看当前词条及其直接关联图谱")}
-                  onClick={() => {
-                    if (state.entities.some((entity) => entity.id === draft.id)) {
-                      openRelatedGraph(draft.id);
-                    } else {
-                      void flushDraft().then((saved) => {
-                        if (saved) openRelatedGraph(draft.id);
-                      });
-                    }
-                  }}
+                  onClick={openCurrentRelatedGraph}
                 >
                   <Network size={14} />
                   {!compactWindow && <span>{translate(language, "关联图谱")}</span>}
@@ -1652,7 +1726,7 @@ function Workspace({
                 </button>
               )}
             </div>
-          </div>
+          </div>}
 
           {error && (
             <div className="error-banner">
@@ -1708,14 +1782,15 @@ function Workspace({
                 pendingDrafts.current.get(entity.id)?.entity ?? entity,
               )}
               selectedIds={graphFilterIds}
-              relatedEntityId={relatedGraphId}
-              onFilterChange={(ids) => {
-                setGraphFilterIds(ids);
-                if (ids.length !== 1 || ids[0] !== relatedGraphId) setRelatedGraphId("");
-              }}
-              onRelatedGraph={(id) => {
-                setRelatedGraphId(id);
-                setGraphFilterIds([id]);
+              relatedEntityId={graphCenterId}
+              lockedCenter={Boolean(relatedGraphId)}
+              onFilterChange={setGraphFilterIds}
+              onRelatedGraph={openRelatedGraph}
+              sidebarOpen={sidebarOpen}
+              onToggleSidebar={() => setSidebarOpen((open) => !open)}
+              onShowFullGraph={() => {
+                setRelatedGraphId("");
+                setGraphFilterIds([]);
               }}
               motionEnabled={motionEnabled}
               writable={state.writable}
@@ -2320,14 +2395,23 @@ function Workspace({
                 transition={{ type: "spring", stiffness: 340, damping: 38 }}
               >
                 <div className="inspector-header">
-                    <span>{translate(language, "检视器")}</span>
-                  <button
-                    className="icon-button compact"
-                    title={translate(language, "关闭检视栏")}
-                    onClick={() => setInspectorOpen(false)}
-                  >
-                    <X size={14} />
-                  </button>
+                  <span>{translate(language, "检视器")}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      className="icon-button compact"
+                      title={translate(language, "查看当前词条及其直接关联图谱")}
+                      onClick={openCurrentRelatedGraph}
+                    >
+                      <Network size={14} />
+                    </button>
+                    <button
+                      className="icon-button compact"
+                      title={translate(language, "关闭检视栏")}
+                      onClick={() => setInspectorOpen(false)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
                 <section className="inspector-section">
                   <div className="inspector-heading">

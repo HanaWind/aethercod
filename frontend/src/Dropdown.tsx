@@ -7,7 +7,7 @@ import { glassSlide } from "./glassMotion";
 type Option = { value: string; label: string };
 type Selection =
   | { multiple?: false; value: string; onChange: (value: string) => void }
-  | { multiple: true; value: string[]; onChange: (value: string[]) => void };
+  | { multiple: true; value: string[]; onChange: (value: string[]) => void; clearLabel?: string };
 
 export default function Dropdown(
   props: Selection & {
@@ -177,6 +177,15 @@ export default function Dropdown(
                     {selected.includes(option.value) && <Check size={13} />}
                   </button>
                 ))}
+                {props.multiple && props.clearLabel && selected.length > 0 && (
+                  <button type="button" role="menuitem" onClick={() => {
+                    props.onChange([]);
+                    setPosition(null);
+                    trigger.current?.focus();
+                  }}>
+                    {props.clearLabel}
+                  </button>
+                )}
               </motion.div>
             )}
           </AnimatePresence>,

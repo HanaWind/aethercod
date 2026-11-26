@@ -6,6 +6,33 @@ from pathlib import Path
 
 WINDOWS_APP_ID = "Aethercod.WorldbuildingDatabase"
 _WINDOW_ICON_HANDLES: list[int] = []
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DONOTROUND = 1
+DWMWCP_ROUND = 2
+
+
+def set_webview_window_corners(window, maximized: bool) -> None:
+    """Apply the Windows 11 corner preference to the actual native window."""
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes import wintypes
+
+        native = getattr(window, "native", None)
+        if native is None:
+            return
+        set_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_attribute.argtypes = [
+            wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ]
+        set_attribute.restype = ctypes.c_long
+        preference = ctypes.c_int(DWMWCP_DONOTROUND if maximized else DWMWCP_ROUND)
+        set_attribute(
+            native.Handle.ToInt64(), DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(preference), ctypes.sizeof(preference),
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return
 
 
 def configure_process_identity() -> None:

@@ -445,6 +445,15 @@ const textUi: Record<string, string> = {
 };
 
 const pickerAndGraphText = {
+  "跳数": "Hops",
+  "减少跳数": "Decrease hops",
+  "增加跳数": "Increase hops",
+  "最大": "Max",
+  "全部连通": "Show all connected entries",
+  "局部图谱": "Local Graph",
+  "返回完整图谱": "Back to Full Graph",
+  "按词条类型筛选": "Filter by entry type",
+  "清除类型筛选": "Clear type filters",
   "选择词条颜色": "Choose entry color",
   "预设色板": "Color presets",
   "自定义颜色": "Custom color",
@@ -493,7 +502,6 @@ const pickerAndGraphText = {
   "文书": "Document",
   "卷轴": "Scroll",
   "历史": "History",
-  "实体与关系": "Entities & Relationships",
   "筛选关系网词条": "Filter network entries",
   "清除全部筛选": "Clear all filters",
   "移除 {name} 筛选": "Remove filter for {name}",
@@ -503,7 +511,7 @@ const pickerAndGraphText = {
   "适配视图": "Fit to view",
   "词条关联图谱": "Entry relationship graph",
   "词条关系网": "Entry relationship network",
-  "{name}，单击居中，双击打开": "{name}. Click to center, double-click to open.",
+  "{name}，单击居中，双击查看局部图谱": "{name}. Click to center, double-click for its local graph.",
   "显示关联图谱": "Show Relationship Graph",
   "无法打开此词条": "Unable to open this entry",
   "词条可能已被删除，或暂时无法加载。": "This entry may have been deleted or may be temporarily unavailable.",

@@ -188,9 +188,10 @@ export type BridgeApi = {
   open_external_url(url: string): Promise<boolean>;
   reveal_project_file(): Promise<void>;
   window_maximized(): Promise<boolean>;
+  move_window(x: number, y: number): Promise<boolean>;
   window_action(
     action: "minimize" | "maximize" | "restore" | "close",
-  ): Promise<void>;
+  ): Promise<boolean>;
 };
 
 declare global {

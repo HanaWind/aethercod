@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from .app_identity import set_webview_window_icon
+from .app_identity import set_webview_window_corners, set_webview_window_icon
 from .bridge_api import BridgeAPI
 
 
@@ -53,6 +53,7 @@ def run_webview(project_argument: Path | None = None) -> int:
     )
     api.bind_window(window)
     window.events.shown += lambda *_args: set_webview_window_icon(window)
+    window.events.shown += lambda *_args: set_webview_window_corners(window, api.window_maximized())
     if startup_error:
         window.events.loaded += lambda *_args: window.run_js(
             "window.__aethercodStartupError = " + json.dumps(startup_error)

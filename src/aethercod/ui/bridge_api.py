@@ -20,6 +20,7 @@ from ..history import EntityHistory
 from ..models import Entity, utc_now
 from ..repositories import atomic, normalize
 from ..services import ProjectService
+from .app_identity import set_webview_window_corners
 
 _T = TypeVar("_T")
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
@@ -70,6 +71,7 @@ class BridgeAPI:
         self._history: EntityHistory | None = None
         self._path = ""
         self._maximized = False
+        self._restore_bounds: tuple[int, int, int, int] | None = None
         self._read_only = False
         self._window_close_approved = False
 
@@ -77,6 +79,7 @@ class BridgeAPI:
         self._window = window
         self._window_close_approved = False
         self._maximized = bool(window.maximized)
+        self._restore_bounds = None
         window.events.maximized += self._mark_maximized
         window.events.restored += self._mark_restored
         window.events.closing += self._request_window_close
@@ -94,31 +97,56 @@ class BridgeAPI:
 
     def _mark_maximized(self, *_args: Any) -> None:
         self._maximized = True
+        set_webview_window_corners(self._window, True)
 
     def _mark_restored(self, *_args: Any) -> None:
-        self._maximized = False
+        # WinForms can report Normal after a minimize while still using our rcWork bounds.
+        self._maximized = self._restore_bounds is not None
+        set_webview_window_corners(self._window, self._maximized)
 
     def window_maximized(self) -> bool:
         return self._maximized
 
     @_serialized
-    def window_action(self, action: str) -> None:
+    def move_window(self, x: float | None, y: float | None) -> bool:
+        if self._window is None or self._maximized or self._window_close_approved:
+            return False
+        if any(
+            type(value) not in (int, float) or not -2**31 <= value < 2**31
+            for value in (x, y)
+        ):
+            return False
+        x, y = int(x), int(y)
+        native = getattr(self._window, "native", None)
+        if sys.platform == "win32" and native is not None:
+            # Some pywebview WinForms versions pass None for the unused dimensions.
+            # Win32 still requires integers in those slots when SWP_NOSIZE is set.
+            scale = getattr(native, "_scale", 1)
+            return self._set_native_bounds(
+                native.Handle.ToInt64(), int(x * scale), int(y * scale),
+                0, 0, 0x0001 | 0x0004 | 0x0010,
+            )
+        self._window.move(x, y)
+        return True
+
+    @_serialized
+    def window_action(self, action: str) -> bool:
         if self._window is None:
-            return
+            return False
         if action == "minimize":
             self._window.minimize()
         elif action == "maximize":
             if self._maximized:
-                self._window.restore()
-                self._maximized = False
+                self._restore_window()
+                self._mark_restored()
             elif sys.platform == "win32" and self._maximize_to_work_area():
-                self._maximized = True
+                self._mark_maximized()
             else:
                 self._window.maximize()
-                self._maximized = True
+                self._mark_maximized()
         elif action == "restore":
-            self._window.restore()
-            self._maximized = False
+            self._restore_window()
+            self._mark_restored()
         elif action == "close":
             self._window_close_approved = True
             try:
@@ -126,6 +154,28 @@ class BridgeAPI:
             except Exception:
                 self._window_close_approved = False
                 raise
+        return self._maximized
+
+    @staticmethod
+    def _set_native_bounds(handle: int, x: int, y: int, width: int, height: int, flags: int) -> bool:
+        import ctypes
+        from ctypes import wintypes
+
+        move = ctypes.windll.user32.SetWindowPos
+        move.argtypes = [
+            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT,
+        ]
+        move.restype = wintypes.BOOL
+        return bool(move(handle, None, x, y, width, height, flags))
+
+    def _restore_window(self) -> None:
+        bounds, self._restore_bounds = self._restore_bounds, None
+        if bounds is not None:
+            native = self._window.native
+            if self._set_native_bounds(native.Handle.ToInt64(), *bounds, 0x0014):
+                return
+        self._window.restore()
 
     def _maximize_to_work_area(self) -> bool:
         """Size the frameless WinForms window to the current monitor work area."""
@@ -133,11 +183,13 @@ class BridgeAPI:
             import ctypes
             from ctypes import wintypes
 
-            class Rect(ctypes.Structure):
-                _fields_ = [(name, wintypes.LONG) for name in ("left", "top", "right", "bottom")]
-
             class MonitorInfo(ctypes.Structure):
-                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", Rect), ("rcWork", Rect), ("dwFlags", wintypes.DWORD)]
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
 
             native = getattr(self._window, "native", None)
             handle = int(native.Handle.ToInt64()) if native is not None else 0
@@ -148,21 +200,26 @@ class BridgeAPI:
             user32.MonitorFromWindow.restype = ctypes.c_void_p
             user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MonitorInfo)]
             user32.GetMonitorInfoW.restype = wintypes.BOOL
-            user32.SetWindowPos.argtypes = [
-                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                ctypes.c_int, ctypes.c_int, wintypes.UINT,
-            ]
-            user32.SetWindowPos.restype = wintypes.BOOL
+            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            user32.GetWindowRect.restype = wintypes.BOOL
             monitor = user32.MonitorFromWindow(wintypes.HWND(handle), 2)
             info = MonitorInfo()
             info.cbSize = ctypes.sizeof(MonitorInfo)
-            if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            original = wintypes.RECT()
+            if not (monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info))
+                    and user32.GetWindowRect(handle, ctypes.byref(original))):
                 return False
             work = info.rcWork
-            return bool(user32.SetWindowPos(
-                wintypes.HWND(handle), None, work.left, work.top,
+            if not self._set_native_bounds(
+                handle, work.left, work.top,
                 work.right - work.left, work.bottom - work.top, 0x0014,
-            ))
+            ):
+                return False
+            self._restore_bounds = (
+                original.left, original.top,
+                original.right - original.left, original.bottom - original.top,
+            )
+            return True
         except (AttributeError, OSError, TypeError, ValueError):
             return False
 
@@ -955,8 +1012,9 @@ class BridgeAPI:
                 ).fetchone()
                 if row is None:
                     continue
-                x = max(0.04, min(0.96, float(point["x"])))
-                y = max(0.06, min(0.9, float(point["y"])))
+                x, y = float(point["x"]), float(point["y"])
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    continue
                 self._conn.execute(
                     "INSERT INTO entity_graph_positions(entity_id,x,y) VALUES(?,?,?) "
                     "ON CONFLICT(entity_id) DO UPDATE SET x=excluded.x,y=excluded.y",

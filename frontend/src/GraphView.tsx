@@ -1,7 +1,15 @@
 import { animate, AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowLeft,
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  Link2,
   Maximize2,
+  Minus,
   Network,
+  Plus,
   Search,
   Trash2,
   X,
@@ -19,7 +27,8 @@ import {
   type CSSProperties,
 } from "react";
 import type { EntitySummary, EntityType, GraphData, GraphNode } from "./api";
-import { initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius } from "./graphLayout";
+import Dropdown from "./Dropdown";
+import { graphDistances, HOVER_SCALE, initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius, separateGraphNodes } from "./graphLayout";
 import { glassFade, glassSlide } from "./glassMotion";
 import { displayTypeName, translate, type Language } from "./i18n";
 
@@ -28,6 +37,8 @@ const MAX_ZOOM = 2.2;
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 type NodeMenu = { id: string; x: number; y: number } | null;
 type Point = { x: number; y: number };
+type Camera = { center: Point | null; zoom: number };
+const EMPTY_TYPES: string[] = [];
 
 export default function GraphView({
   graph,
@@ -36,8 +47,12 @@ export default function GraphView({
   entities,
   selectedIds,
   relatedEntityId,
+  lockedCenter,
   onFilterChange,
   onRelatedGraph,
+  onShowFullGraph,
+  sidebarOpen,
+  onToggleSidebar,
   motionEnabled,
   writable,
   onSelect,
@@ -50,8 +65,12 @@ export default function GraphView({
   entities: EntitySummary[];
   selectedIds: string[];
   relatedEntityId: string;
+  lockedCenter: boolean;
   onFilterChange: (ids: string[]) => void;
   onRelatedGraph: (id: string) => void;
+  onShowFullGraph: () => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
   motionEnabled: boolean;
   writable: boolean;
   onSelect: (entityId: string) => void;
@@ -68,22 +87,29 @@ export default function GraphView({
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
-  const [zoom, setZoom] = useState(1);
-  const [renderedZoom, setRenderedZoom] = useState(1);
-  const zoomFrame = useRef(1);
+  const [camera, setCamera] = useState<Camera>({ center: null, zoom: 1 });
+  const cameraAnimation = useRef<{ stop: () => void } | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [centeredNodeId, setCenteredNodeId] = useState("");
   const [focusPositions, setFocusPositions] = useState<Record<string, Point>>({});
   const [nodeMenu, setNodeMenu] = useState<NodeMenu>(null);
   const [filterQuery, setFilterQuery] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
+  const filterControl = useRef<HTMLDivElement>(null);
+  const filterTrigger = useRef<HTMLButtonElement>(null);
+  const [hopValue, setHopValue] = useState<{ centerId: string; text: string; distance: number } | null>(null);
+  const [typeSelection, setTypeSelection] = useState({ centerId: relatedEntityId, ids: EMPTY_TYPES });
+  const typeFilters = typeSelection.centerId === relatedEntityId ? typeSelection.ids : EMPTY_TYPES;
   const [panning, setPanning] = useState(false);
-  const zoomAnchor = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
-  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const panStart = useRef<{ x: number; y: number; center: Point; scale: number } | null>(null);
   const drag = useRef<{
     id: string;
     x: number;
     y: number;
+    worldX: number;
+    worldY: number;
+    scale: number;
+    point?: Point;
     moved: boolean;
   } | null>(null);
   const suppressClick = useRef("");
@@ -92,85 +118,56 @@ export default function GraphView({
   const displayedFocus = useRef<Record<string, Point>>({});
   const positionAnimation = useRef(0);
   const canvas = useRef<HTMLDivElement>(null);
-  const viewportElement = useRef<HTMLDivElement>(null);
-  const scene = useRef<SVGGElement>(null);
   const lineMaskId = useId();
+  const hopInputId = useId();
   const { nodes: initialNodes, width: WIDTH, height: HEIGHT } = useMemo(
     () => initializeGraphLayout(graph.nodes),
     [graph.nodes],
   );
   const viewScale = Math.min(viewport.width / WIDTH, viewport.height / HEIGHT);
-  const nodeScale = viewScale * renderedZoom;
+  const { zoom } = camera;
+  const worldScale = viewScale * zoom;
+  const defaultCenter = useMemo(() => ({ x: WIDTH / 2, y: HEIGHT / 2 }), [WIDTH, HEIGHT]);
+  const center = camera.center ?? defaultCenter;
+  const viewLeft = worldScale ? center.x - viewport.width / (2 * worldScale) : 0;
+  const viewTop = worldScale ? center.y - viewport.height / (2 * worldScale) : 0;
 
   useLayoutEffect(() => {
     const element = canvas.current;
     if (!element) return;
-    const measure = () => setViewport({
-      width: element.clientWidth,
-      height: element.clientHeight,
-    });
+    const measure = () => {
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      setViewport((current) => current.width === width && current.height === height
+        ? current : { width, height });
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
-  useLayoutEffect(() => {
-    const update = (value: number) => {
-      zoomFrame.current = value;
-      setRenderedZoom(value);
-    };
-    if (!motionEnabled) {
-      update(zoom);
-      requestAnimationFrame(() => { zoomAnchor.current = null; });
-      return;
-    }
-    const animation = animate(zoomFrame.current, zoom, {
-      duration: 0.16,
-      ease: [0.22, 1, 0.36, 1],
-      onUpdate: update,
-      onComplete: () => { zoomAnchor.current = null; },
-    });
-    return () => animation.stop();
-  }, [motionEnabled, zoom]);
-
   const baseNodes = useMemo(
     () => initialNodes.map((node) => ({ ...node, ...positions[node.id] })),
     [initialNodes, positions],
   );
+
   const nodes = useMemo(
     () => baseNodes.map((node) => ({ ...node, ...focusPositions[node.id] })),
     [baseNodes, focusPositions],
   );
   const extent = useMemo(() => {
     if (!nodes.length) return { left: 0, top: 0, width: WIDTH, height: HEIGHT };
-    const xs = nodes.map((node) => node.x * WIDTH);
-    const ys = nodes.map((node) => node.y * HEIGHT);
-    const left = Math.min(0, ...nodes.map((node, index) => xs[index] - nodeRadius(node.name) - 48));
-    const top = Math.min(0, ...ys.map((y) => y - NODE_HALF_HEIGHT - 48));
-    const right = Math.max(WIDTH, ...nodes.map((node, index) => xs[index] + nodeRadius(node.name) + 48));
-    const bottom = Math.max(HEIGHT, ...ys.map((y) => y + NODE_HALF_HEIGHT + 48));
+    let left = 0, top = 0, right = WIDTH, bottom = HEIGHT;
+    for (const node of nodes) {
+      const radius = nodeRadius(node.name);
+      left = Math.min(left, node.x * WIDTH - radius - 48);
+      right = Math.max(right, node.x * WIDTH + radius + 48);
+      top = Math.min(top, node.y * HEIGHT - NODE_HALF_HEIGHT - 48);
+      bottom = Math.max(bottom, node.y * HEIGHT + NODE_HALF_HEIGHT + 48);
+    }
     return { left, top, width: right - left, height: bottom - top };
   }, [HEIGHT, WIDTH, nodes]);
-  const worldWidth = extent.width * nodeScale;
-  const worldHeight = extent.height * nodeScale;
-  const worldScale = nodeScale;
-  const worldOffsetX = 0;
-  const worldOffsetY = 0;
-
-  useLayoutEffect(() => {
-    const anchor = zoomAnchor.current;
-    const element = canvas.current;
-    if (!anchor || !element) return;
-    const bounds = element.getBoundingClientRect();
-    const style = getComputedStyle(element);
-    const originX = bounds.left + element.clientLeft + parseFloat(style.paddingLeft);
-    const originY = bounds.top + element.clientTop + parseFloat(style.paddingTop);
-    const contentX = worldOffsetX + (anchor.x - extent.left) * worldScale;
-    const contentY = worldOffsetY + (anchor.y - extent.top) * worldScale;
-    element.scrollLeft = contentX - (anchor.clientX - originX);
-    element.scrollTop = contentY - (anchor.clientY - originY);
-  }, [extent, worldOffsetX, worldOffsetY, worldScale, worldWidth, worldHeight]);
   const edges = useMemo(() => {
     const byId = new Map(nodes.map((node) => [node.id, node]));
     return graph.edges
@@ -186,24 +183,48 @@ export default function GraphView({
           Boolean(item.source && item.target),
       );
   }, [graph.edges, nodes]);
-  const visibleGraph = useMemo(() => {
-    if (!selectedIds.length) return { nodes, edges };
+  const localDistances = useMemo(
+    () => relatedEntityId ? graphDistances(graph.edges, relatedEntityId) : null,
+    [graph.edges, relatedEntityId],
+  );
+  const maxHops = useMemo(() => {
+    let max = 0;
+    for (const distance of localDistances?.values() ?? []) max = Math.max(max, distance);
+    return max;
+  }, [localDistances]);
+  const defaultHops = Math.min(1, maxHops);
+  const currentHop = hopValue?.centerId === relatedEntityId ? hopValue : null;
+  const hops = Math.min(currentHop?.distance ?? defaultHops, maxHops);
+  const hopInput = currentHop?.text ?? String(defaultHops);
+  const centerEntity = entities.find(({ id }) => id === relatedEntityId) ??
+    initialNodes.find(({ id }) => id === relatedEntityId);
+  const visibleNodeIds = useMemo(() => {
     const selected = new Set(selectedIds);
+    const typeIds = new Set(typeFilters);
     const visible = new Set(selectedIds);
-    for (const { edge } of edges) {
-      if (selected.has(edge.source_id)) visible.add(edge.target_id);
-      if (selected.has(edge.target_id)) visible.add(edge.source_id);
+    if (!localDistances) {
+      for (const edge of graph.edges) {
+        if (selected.has(edge.source_id)) visible.add(edge.target_id);
+        if (selected.has(edge.target_id)) visible.add(edge.source_id);
+      }
     }
+    return new Set(initialNodes.filter((node) =>
+      (localDistances
+        ? (localDistances.get(node.id) ?? Infinity) <= hops
+        : !selected.size || visible.has(node.id)) &&
+      (!typeIds.size || typeIds.has(node.type_id)),
+    ).map(({ id }) => id));
+  }, [graph.edges, hops, initialNodes, localDistances, selectedIds, typeFilters]);
+  const visibleGraph = useMemo(() => {
+    const selected = new Set(selectedIds);
     return {
-      nodes: nodes.filter((node) => visible.has(node.id)),
-      edges: edges.filter(
-        ({ edge }) =>
-          visible.has(edge.source_id) &&
-          visible.has(edge.target_id) &&
-          (selected.has(edge.source_id) || selected.has(edge.target_id)),
-      ),
+      nodes: nodes.filter(({ id }) => visibleNodeIds.has(id)),
+      edges: edges.filter(({ source, target }) =>
+        visibleNodeIds.has(source.id) && visibleNodeIds.has(target.id) &&
+        (!localDistances || hops !== 0) &&
+        (localDistances || !selected.size || selected.has(source.id) || selected.has(target.id))),
     };
-  }, [edges, nodes, selectedIds]);
+  }, [edges, hops, localDistances, nodes, selectedIds, visibleNodeIds]);
   const filterOptions = entities.filter(
     (entity) =>
       !selectedIds.includes(entity.id) &&
@@ -212,8 +233,9 @@ export default function GraphView({
           .toLocaleLowerCase()
           .includes(filterQuery.trim().toLocaleLowerCase())),
   );
-  const visibleGraphRef = useRef(visibleGraph);
-  visibleGraphRef.current = visibleGraph;
+  const baseNodesRef = useRef(baseNodes);
+  baseNodesRef.current = baseNodes;
+
   const entityColors = useMemo(
     () => new Map(entities.map((entity) => [entity.id, entity.color])),
     [entities],
@@ -224,9 +246,21 @@ export default function GraphView({
       window.clearTimeout(clickTimer.current);
       window.clearTimeout(dragHoldTimer.current);
       window.cancelAnimationFrame(positionAnimation.current);
+      cameraAnimation.current?.stop();
     },
     [],
   );
+
+  useEffect(() => {
+    if (!filterOpen) return;
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Node && !filterControl.current?.contains(event.target)) {
+        setFilterOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", closeOnOutside);
+    return () => window.removeEventListener("pointerdown", closeOnOutside);
+  }, [filterOpen]);
 
   useEffect(() => {
     if (!nodeMenu) return;
@@ -250,34 +284,33 @@ export default function GraphView({
       event.stopPropagation();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
       const factor = Math.exp(-event.deltaY * unit * 0.0012);
-      const bounds = viewportElement.current?.getBoundingClientRect();
-      if (bounds) {
-        zoomAnchor.current = {
-          x: extent.left + (event.clientX - bounds.left - worldOffsetX) / worldScale,
-          y: extent.top + (event.clientY - bounds.top - worldOffsetY) / worldScale,
-          clientX: event.clientX,
-          clientY: event.clientY,
-        };
-      }
-      setZoom((current) => {
-        const next = clampZoom(current * factor);
-        if (next === current) requestAnimationFrame(() => { zoomAnchor.current = null; });
-        return next;
+      if (panStart.current || drag.current || !viewScale || !Number.isFinite(event.deltaY)) return;
+      const bounds = element.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const offsetX = ((event.clientX - bounds.left) / bounds.width - 0.5) * viewport.width;
+      const offsetY = ((event.clientY - bounds.top) / bounds.height - 0.5) * viewport.height;
+      cameraAnimation.current?.stop();
+      setCamera((current) => {
+        const next = clampZoom(current.zoom * factor);
+        if (next === current.zoom) return current;
+        const origin = current.center ?? defaultCenter;
+        const delta = (1 / current.zoom - 1 / next) / viewScale;
+        return { zoom: next, center: { x: origin.x + offsetX * delta, y: origin.y + offsetY * delta } };
       });
     };
     element.addEventListener("wheel", zoomFromWheel, { passive: false });
     return () => element.removeEventListener("wheel", zoomFromWheel);
-  }, [extent, worldOffsetX, worldOffsetY, worldScale]);
+  }, [defaultCenter, viewport, viewScale]);
 
   const startPan = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target as Element).closest(".graph-node-glass, button, input")) return;
-    const element = canvas.current;
-    if (!element) return;
+    if (!worldScale) return;
+    cameraAnimation.current?.stop();
     panStart.current = {
       x: event.clientX,
       y: event.clientY,
-      left: element.scrollLeft,
-      top: element.scrollTop,
+      center,
+      scale: worldScale,
     };
     setPanning(true);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -285,10 +318,14 @@ export default function GraphView({
 
   const movePan = (event: PointerEvent<HTMLDivElement>) => {
     const start = panStart.current;
-    const element = canvas.current;
-    if (!start || !element) return;
-    element.scrollLeft = start.left - (event.clientX - start.x);
-    element.scrollTop = start.top - (event.clientY - start.y);
+    if (!start) return;
+    setCamera((current) => ({
+      ...current,
+      center: {
+        x: start.center.x - (event.clientX - start.x) / start.scale,
+        y: start.center.y - (event.clientY - start.y) / start.scale,
+      },
+    }));
   };
 
   const finishPan = () => {
@@ -298,8 +335,7 @@ export default function GraphView({
 
   const moveNode = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
-    const matrix = scene.current?.getScreenCTM();
-    if (!current || !matrix) return;
+    if (!current) return;
     if (
       !current.moved &&
       Math.hypot(event.clientX - current.x, event.clientY - current.y) < 4
@@ -311,15 +347,14 @@ export default function GraphView({
     }
     window.cancelAnimationFrame(positionAnimation.current);
     window.clearTimeout(dragHoldTimer.current);
-    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(
-      matrix.inverse(),
-    );
+    const point = {
+      x: current.worldX + (event.clientX - current.x) / current.scale / WIDTH,
+      y: current.worldY + (event.clientY - current.y) / current.scale / HEIGHT,
+    };
+    current.point = point;
     setPositions((previous) => ({
       ...previous,
-      [current.id]: {
-        x: point.x / WIDTH,
-        y: point.y / HEIGHT,
-      },
+      [current.id]: point,
     }));
     dragHoldTimer.current = window.setTimeout(
       () => resolveDragAvoidance(current.id),
@@ -336,65 +371,19 @@ export default function GraphView({
 
   const resolveDragAvoidance = (anchorId: string) => {
     if (!writable) return;
-    const currentNodes = visibleGraphRef.current.nodes;
-    const points = new Map(
-      currentNodes.map((node) => [node.id, { x: node.x * WIDTH, y: node.y * HEIGHT }]),
+    const currentNodes = baseNodesRef.current.map((node) =>
+      node.id === anchorId && drag.current?.point ? { ...node, ...drag.current.point } : node,
     );
     const byId = new Map(currentNodes.map((node) => [node.id, node]));
-    for (let pass = 0; pass < 8; pass += 1) {
-      let moved = false;
-      for (let leftIndex = 0; leftIndex < currentNodes.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1; rightIndex < currentNodes.length; rightIndex += 1) {
-          const left = currentNodes[leftIndex];
-          const right = currentNodes[rightIndex];
-          const leftPoint = points.get(left.id)!;
-          const rightPoint = points.get(right.id)!;
-          const requiredX = nodeRadius(left.name) + nodeRadius(right.name) + 14;
-          const requiredY = 86;
-          let dx = rightPoint.x - leftPoint.x;
-          let dy = rightPoint.y - leftPoint.y;
-          let nx = dx / requiredX;
-          let ny = dy / requiredY;
-          let distance = Math.hypot(nx, ny);
-          if (distance >= 1) continue;
-          if (distance < 0.001) {
-            const seed = Number.parseInt(right.id.slice(0, 4), 16) || rightIndex;
-            const angle = seed * 2.399963;
-            nx = Math.cos(angle);
-            ny = Math.sin(angle);
-            distance = 0;
-          }
-          const push = 1 - distance + 0.06;
-          const target = right.id === anchorId ? left : right;
-          const direction = target.id === right.id ? 1 : -1;
-          const targetPoint = points.get(target.id)!;
-          const next = {
-            x: targetPoint.x + direction * nx * requiredX * push,
-            y: targetPoint.y + direction * ny * requiredY * push,
-          };
-          if (Math.hypot(next.x - targetPoint.x, next.y - targetPoint.y) > 0.5) {
-            points.set(target.id, next);
-            moved = true;
-          }
-        }
-      }
-      if (!moved) break;
-    }
-
+    const anchor = byId.get(anchorId);
+    if (!anchor) return;
+    const ordered = [anchor, ...currentNodes.filter(({ id }) => id !== anchorId)];
     const targets = Object.fromEntries(
-      [...points.entries()]
-        .filter(([id, point]) => {
-          const current = byId.get(id)!;
-          return (
-            id === anchorId ||
-            Math.hypot(
-              point.x / WIDTH - current.x,
-              point.y / HEIGHT - current.y,
-            ) > 0.0005
-          );
-        })
-        .map(([id, point]) => [id, { x: point.x / WIDTH, y: point.y / HEIGHT }]),
-    ) as Record<string, Point>;
+      separateGraphNodes(ordered, WIDTH, HEIGHT)
+        .filter(({ id, x, y }) => id === anchorId ||
+          Math.abs(x - byId.get(id)!.x) > 1e-9 || Math.abs(y - byId.get(id)!.y) > 1e-9)
+        .map(({ id, x, y }) => [id, { x, y }]),
+    );
     const entries = Object.entries(targets);
     if (!entries.length) return;
     const from = Object.fromEntries(
@@ -403,15 +392,12 @@ export default function GraphView({
         return [id, { x: node.x, y: node.y }];
       }),
     ) as Record<string, Point>;
-    const persist = () => {
-      setPositions((previous) => ({ ...previous, ...targets }));
-      void window.pywebview?.api
-        .save_graph_layout(targets)
-        .catch((reason: Error) => onError(reason.message));
-    };
+    void window.pywebview?.api
+      .save_graph_layout(targets)
+      .catch((reason: Error) => onError(reason.message));
     window.cancelAnimationFrame(positionAnimation.current);
     if (!motionEnabled) {
-      persist();
+      setPositions((previous) => ({ ...previous, ...targets }));
       return;
     }
     const startedAt = performance.now();
@@ -435,7 +421,6 @@ export default function GraphView({
         ),
       }));
       if (progress === 1) {
-        persist();
         return;
       }
       positionAnimation.current = window.requestAnimationFrame(animate);
@@ -447,21 +432,11 @@ export default function GraphView({
     const nextId = centeredNodeId === node.id ? "" : node.id;
     const targets: Record<string, Point> = {};
     if (nextId) {
-      targets[nextId] = { x: 0.5, y: 0.5 };
+      targets[nextId] = { x: center.x / WIDTH, y: center.y / HEIGHT };
       const visibleIds = new Set(visibleGraph.nodes.map((item) => item.id));
-      for (const [index, neighbor] of baseNodes.entries()) {
-        if (neighbor.id === nextId || !visibleIds.has(neighbor.id)) continue;
-        const clearanceX = nodeRadius(node.name) + nodeRadius(neighbor.name) + 20;
-        const clearanceY = 100;
-        const dx = (neighbor.x - 0.5) * WIDTH / clearanceX;
-        const dy = (neighbor.y - 0.5) * HEIGHT / clearanceY;
-        const distance = Math.hypot(dx, dy);
-        const angle = distance > 0.001 ? Math.atan2(dy, dx) : index * 2.4;
-        const spread = Math.max(distance + 0.11, 1.12);
-        targets[neighbor.id] = {
-          x: 0.5 + Math.cos(angle) * clearanceX * spread / WIDTH,
-          y: 0.5 + Math.sin(angle) * clearanceY * spread / HEIGHT,
-        };
+      const others = baseNodes.filter(({ id }) => id !== nextId && visibleIds.has(id));
+      for (const { id, x, y } of separateGraphNodes([{ ...node, ...targets[nextId] }, ...others], WIDTH, HEIGHT)) {
+        targets[id] = { x, y };
       }
     }
     setCenteredNodeId(nextId);
@@ -520,18 +495,79 @@ export default function GraphView({
   };
 
   const openNode = (nodeId: string) => {
-    window.clearTimeout(clickTimer.current);
-    setNodeMenu(null);
-    onSelect(nodeId);
-  };
-
-  const zoomBy = (amount: number) =>
-    setZoom((current) => clampZoom(current + amount));
-
-  const fit = () => {
-    setZoom(1);
     resetFocus();
+    setFilterOpen(false);
+    setNodeMenu(null);
+    onRelatedGraph(nodeId);
   };
+
+  const zoomBy = (amount: number) => {
+    cameraAnimation.current?.stop();
+    setCamera((current) => ({ ...current, zoom: clampZoom(current.zoom + amount) }));
+  };
+
+  const fit = (smooth = true) => {
+    resetFocus();
+    cameraAnimation.current?.stop();
+    if (!visibleNodeIds.size || !viewScale) return;
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const node of baseNodes) {
+      if (!visibleNodeIds.has(node.id)) continue;
+      const radius = nodeRadius(node.name) * HOVER_SCALE + 24;
+      const halfHeight = NODE_HALF_HEIGHT * HOVER_SCALE + 24;
+      left = Math.min(left, node.x * WIDTH - radius);
+      right = Math.max(right, node.x * WIDTH + radius);
+      top = Math.min(top, node.y * HEIGHT - halfHeight);
+      bottom = Math.max(bottom, node.y * HEIGHT + halfHeight);
+    }
+    const fitScale = Math.min(viewport.width / (right - left), viewport.height / (bottom - top));
+    const target = {
+      center: { x: (left + right) / 2, y: (top + bottom) / 2 },
+      zoom: clampZoom(fitScale / viewScale),
+    };
+    if (!motionEnabled || !smooth) {
+      setCamera(target);
+      return;
+    }
+    cameraAnimation.current = animate(0, 1, {
+      duration: 0.26,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: (progress) => setCamera({
+        center: {
+          x: center.x + (target.center.x - center.x) * progress,
+          y: center.y + (target.center.y - center.y) * progress,
+        },
+        zoom: zoom + (target.zoom - zoom) * progress,
+      }),
+    });
+  };
+
+  const fitScope = useMemo(() => JSON.stringify([relatedEntityId, [...visibleNodeIds].sort()]),
+    [relatedEntityId, visibleNodeIds]);
+  const lastFitScope = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!viewScale || lastFitScope.current === fitScope) return;
+    if (!visibleNodeIds.size) {
+      cameraAnimation.current?.stop();
+      if (lastFitScope.current !== null) lastFitScope.current = fitScope;
+      return;
+    }
+    const smooth = lastFitScope.current !== null;
+    lastFitScope.current = fitScope;
+    fit(smooth);
+  });
+
+  const changeHops = (distance: number) => {
+    const next = Math.max(0, Math.min(distance, maxHops));
+    setHopValue({ centerId: relatedEntityId, text: String(next), distance: next });
+  };
+
+  const stats = language === "en"
+    ? `${plural(visibleGraph.nodes.length, "node")} · ${plural(visibleGraph.edges.length, "relationship")}`
+    : `${visibleGraph.nodes.length} 实体 · ${visibleGraph.edges.length} 关系`;
+  const title = relatedEntityId
+    ? `${centerEntity?.name ?? t("词条")} · ${t("局部图谱")}`
+    : t("关系网");
 
   const changeFilters = (ids: string[]) => {
     resetFocus();
@@ -550,142 +586,223 @@ export default function GraphView({
 
   return (
     <div className="graph-page">
-      <header className="view-header">
-        <div>
-          <span className="section-kicker">{t("实体与关系")}</span>
-          <h1>{t(relatedEntityId ? "关联图谱" : "关系网")}</h1>
+      <header className="graph-toolbar">
+        <div className="graph-heading">
+          <button type="button" className="graph-control graph-icon-button"
+            title={t(sidebarOpen ? "收起侧栏" : "展开侧栏")}
+            aria-label={t(sidebarOpen ? "收起侧栏" : "展开侧栏")}
+            aria-expanded={sidebarOpen} onClick={onToggleSidebar}>
+            {sidebarOpen ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+          </button>
+          {centerEntity && <span className="entity-dot" style={{ background: centerEntity.color }} />}
+          <h1 title={title}>
+            {relatedEntityId ? (
+              <>
+                {centerEntity?.name ?? t("词条")}
+                <span className="graph-heading-mode"> · {t("局部图谱")}</span>
+              </>
+            ) : title}
+          </h1>
         </div>
-        <div className="graph-filter-wrap">
-          <div className="graph-filter-input">
-            <Search size={14} />
-            <input
-              value={filterQuery}
-              aria-label={t("筛选关系网词条")}
-              placeholder={t("搜索并筛选词条")}
-              onFocus={() => setFilterOpen(true)}
-              onChange={(event) => {
-                setFilterQuery(event.target.value);
-                setFilterOpen(true);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setFilterOpen(false);
-                if (event.key === "Enter" && filterOptions[0]) {
-                  event.preventDefault();
-                  changeFilters([...selectedIds, filterOptions[0].id]);
-                  setFilterQuery("");
-                  setFilterOpen(false);
-                }
-              }}
+
+        <div className="graph-toolbar-actions">
+          <div className="graph-stats graph-tool-group" title={stats} aria-label={stats} role="group">
+            <span className="graph-stats-text">{stats}</span>
+            <span className="graph-stats-icons" aria-hidden="true">
+              <Circle size={10} /> {visibleGraph.nodes.length}
+              <Link2 size={12} /> {visibleGraph.edges.length}
+            </span>
+            <span className="graph-stats-counts" aria-hidden="true">
+              {visibleGraph.nodes.length} · {visibleGraph.edges.length}
+            </span>
+          </div>
+
+          <div className="graph-types graph-tool-group">
+            <Dropdown multiple label={t("按词条类型筛选")} placeholder={t("全部类型")}
+              clearLabel={t("清除类型筛选")}
+              value={typeFilters}
+              options={types.map((type) => ({ value: type.id, label: displayTypeName(language, type) }))}
+              onChange={(ids) => setTypeSelection({ centerId: relatedEntityId, ids })}
             />
-            {selectedIds.length > 0 && (
-              <button
-                className="graph-filter-clear"
-                title={t("清除全部筛选")}
-                aria-label={t("清除全部筛选")}
-                onClick={() => changeFilters([])}
-              >
-                <X size={13} />
-              </button>
+            {!lockedCenter && (
+              <div className="graph-filter-wrap" ref={filterControl}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) setFilterOpen(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.stopPropagation();
+                  setFilterOpen(false);
+                  filterTrigger.current?.focus();
+                }}>
+                <button ref={filterTrigger} type="button"
+                  className={`graph-control graph-icon-button${selectedIds.length ? " is-active" : ""}`}
+                  title={t("筛选关系网词条")} aria-label={t("筛选关系网词条")}
+                  aria-expanded={filterOpen} onClick={() => setFilterOpen((open) => !open)}>
+                  <Search size={14} />
+                </button>
+                {filterOpen && (
+                  <div className="graph-filter-menu glass-menu">
+                    <div className="graph-filter-input">
+                      <Search size={14} />
+                      <input autoFocus value={filterQuery}
+                        aria-label={t("筛选关系网词条")} placeholder={t("搜索并筛选词条")}
+                        onChange={(event) => setFilterQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && filterOptions[0]) {
+                            event.preventDefault();
+                            changeFilters([...selectedIds, filterOptions[0].id]);
+                            setFilterQuery("");
+                          }
+                        }}
+                      />
+                      {selectedIds.length > 0 && (
+                        <button type="button" className="graph-filter-clear"
+                          title={t("清除全部筛选")} aria-label={t("清除全部筛选")}
+                          onClick={() => changeFilters([])}>
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
+                    {selectedIds.length > 0 && (
+                      <div className="graph-filter-chips">
+                        {entities.filter(({ id }) => selectedIds.includes(id)).map((entity) => {
+                          const removeLabel = t("移除 {name} 筛选").replace("{name}", () => entity.name);
+                          return (
+                            <span className="graph-filter-chip" key={entity.id}>
+                              {entity.name}
+                              <button type="button" title={removeLabel} aria-label={removeLabel}
+                                onClick={() => {
+                                  changeFilters(selectedIds.filter((id) => id !== entity.id));
+                                  filterControl.current?.querySelector("input")?.focus();
+                                }}>
+                                <X size={11} />
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {filterOptions.slice(0, 8).map((entity) => (
+                      <button type="button" className="graph-filter-result" key={entity.id}
+                        onClick={() => {
+                          changeFilters([...selectedIds, entity.id]);
+                          setFilterQuery("");
+                          filterControl.current?.querySelector("input")?.focus();
+                        }}>
+                        <span className="entity-dot" style={{ background: entity.color }} />
+                        <span>{entity.name}</span>
+                      </button>
+                    ))}
+                    {!filterOptions.length && <p role="status">{t("没有匹配的词条")}</p>}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-          {selectedIds.length > 0 && (
-            <div className="graph-filter-chips">
-              {selectedIds.map((id) => {
-                const entity = entities.find((item) => item.id === id);
-                if (!entity) return null;
-                return (
-                  <span className="graph-filter-chip" key={id}>
-                    {entity.name}
-                    <button
-                      title={t("移除 {name} 筛选").replace("{name}", () => entity.name)}
-                      aria-label={t("移除 {name} 筛选").replace("{name}", () => entity.name)}
-                      onClick={() =>
-                        changeFilters(selectedIds.filter((item) => item !== id))
-                      }
-                    >
-                      <X size={11} />
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          {filterOpen && (filterOptions.length > 0 || filterQuery.trim()) && (
-            <div className="graph-filter-menu glass-menu">
-              {filterOptions.slice(0, 8).map((entity) => (
-                <button
-                  key={entity.id}
-                  onClick={() => {
-                    changeFilters([...selectedIds, entity.id]);
-                    setFilterQuery("");
-                    setFilterOpen(false);
-                  }}
-                >
-                  <span className="entity-dot" style={{ background: entity.color }} />
-                  <span>{entity.name}</span>
+
+          {relatedEntityId && (
+            <div className="graph-local-controls graph-tool-group">
+              <label className="graph-hop-label" htmlFor={hopInputId}>{t("跳数")}</label>
+              <div className="graph-hop-control graph-control">
+                <button type="button" title={t("减少跳数")} aria-label={t("减少跳数")}
+                  disabled={hops === 0} onClick={() => changeHops(hops - 1)}>
+                  <Minus size={13} />
                 </button>
-              ))}
-              {!filterOptions.length && <p role="status">{t("没有匹配的词条")}</p>}
+                <input id={hopInputId} type="number" min={0} max={maxHops} step={1} value={hopInput}
+                  aria-invalid={Boolean(hopInput) && !/^\d+$/.test(hopInput)}
+                  onChange={(event) => {
+                    const text = event.target.value;
+                    setHopValue({
+                      centerId: relatedEntityId,
+                      text,
+                      distance: /^\d+$/.test(text) ? Math.min(Number(text), maxHops) : hops,
+                    });
+                  }}
+                  onBlur={() => changeHops(hops)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      changeHops(hops);
+                    }
+                  }}
+                />
+                <button type="button" title={t("增加跳数")} aria-label={t("增加跳数")}
+                  disabled={hops === maxHops} onClick={() => changeHops(hops + 1)}>
+                  <Plus size={13} />
+                </button>
+              </div>
+              <button type="button" className="graph-control graph-hop-max"
+                aria-pressed={hops === maxHops}
+                title={t("全部连通")} onClick={() => changeHops(maxHops)}>
+                {t("最大")} ({maxHops})
+              </button>
+              <button type="button" className="graph-control graph-full-button"
+                title={t("返回完整图谱")} aria-label={t("返回完整图谱")}
+                onClick={() => {
+                  setHopValue(null);
+                  setTypeSelection({ centerId: "", ids: EMPTY_TYPES });
+                  setFilterQuery("");
+                  setFilterOpen(false);
+                  onShowFullGraph();
+                }}>
+                <ArrowLeft size={14} />
+                <span>{t("返回完整图谱")}</span>
+              </button>
             </div>
           )}
-        </div>
-        <div className="graph-controls">
-          <span>
-            {language === "en"
-              ? `${plural(visibleGraph.nodes.length, "node")} · ${plural(visibleGraph.edges.length, "relationship")}`
-              : `${visibleGraph.nodes.length} 个实体 · ${visibleGraph.edges.length} 条关系`}
-          </span>
-          <button
-            className="icon-button"
-            title={t("缩小")}
-            aria-label={t("缩小")}
-            onClick={() => zoomBy(-0.12)}
-          >
-            <ZoomOut size={15} />
-          </button>
-          <output className="graph-zoom-level" title={t("缩放比例")} aria-label={t("缩放比例")}>
-            {percent.format(zoom)}
-          </output>
-          <button
-            className="icon-button"
-            title={t("放大")}
-            aria-label={t("放大")}
-            onClick={() => zoomBy(0.12)}
-          >
-            <ZoomIn size={15} />
-          </button>
-          <button className="icon-button" title={t("适配视图")} aria-label={t("适配视图")} onClick={fit}>
-            <Maximize2 size={15} />
-          </button>
+
+          <div className="graph-zoom-controls graph-tool-group" role="group"
+            title={`${t("缩放比例")} ${percent.format(zoom)}`}>
+            <button type="button" className="graph-control graph-icon-button"
+              title={t("缩小")} aria-label={t("缩小")} disabled={zoom <= MIN_ZOOM}
+              onClick={() => zoomBy(-0.12)}>
+              <ZoomOut size={15} />
+            </button>
+            <output className="graph-zoom-level" title={t("缩放比例")} aria-label={t("缩放比例")}>
+              {percent.format(zoom)}
+            </output>
+            <button type="button" className="graph-control graph-icon-button"
+              title={t("放大")} aria-label={t("放大")} disabled={zoom >= MAX_ZOOM}
+              onClick={() => zoomBy(0.12)}>
+              <ZoomIn size={15} />
+            </button>
+            <button type="button" className="graph-control graph-icon-button"
+              title={t("适配视图")} aria-label={t("适配视图")}
+              disabled={!visibleNodeIds.size} onClick={() => fit()}>
+              <Maximize2 size={15} />
+            </button>
+          </div>
         </div>
       </header>
       <div className={`graph-canvas-wrap${panning ? " is-panning" : ""}`} ref={canvas}
         onPointerDown={startPan}
         onPointerMove={(event) => { movePan(event); moveNode(event); }}
         onPointerUp={() => { finishPan(); finishDrag(); }}
+        onLostPointerCapture={() => { finishPan(); finishDrag(); }}
         onPointerCancel={() => { finishPan(); finishDrag(); }}>
-        <div className="graph-viewport" ref={viewportElement}
-          style={{ width: worldWidth, height: worldHeight }}>
-        {visibleGraph.nodes.length ? (
+        <div className="graph-viewport">
+        {visibleGraph.nodes.length && worldScale ? (
           <>
           <svg
             className="graph-canvas"
-            viewBox={`${extent.left} ${extent.top} ${extent.width} ${extent.height}`}
-            style={{ width: worldWidth, height: worldHeight }}
+            viewBox={`${viewLeft} ${viewTop} ${viewport.width / worldScale} ${viewport.height / worldScale}`}
+            preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <g ref={scene}>
+            <g>
               <defs>
                 {/* Cut the edges out below the glass while keeping the canvas visible. */}
                 <mask
                   id={lineMaskId}
                   maskUnits="userSpaceOnUse"
-                  x={-WIDTH}
-                  y={-HEIGHT}
-                  width={3 * WIDTH}
-                  height={3 * HEIGHT}
+                  maskContentUnits="userSpaceOnUse"
+                  x={extent.left}
+                  y={extent.top}
+                  width={extent.width}
+                  height={extent.height}
                 >
-                  <rect x={-WIDTH} y={-HEIGHT} width={3 * WIDTH} height={3 * HEIGHT} fill="white" />
+                  <rect x={extent.left} y={extent.top} width={extent.width} height={extent.height} fill="white" />
                   {visibleGraph.nodes.map((node) => (
                     <g key={node.id} transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}>
                       <ellipse
@@ -727,7 +844,6 @@ export default function GraphView({
             </g>
           </svg>
           <div className="graph-node-layer" role="group"
-            style={{ width: worldWidth, height: worldHeight }}
             aria-label={t(relatedEntityId ? "词条关联图谱" : "词条关系网")}>
               <AnimatePresence initial={false}>
                 {[...visibleGraph.nodes].sort((left, right) =>
@@ -737,25 +853,30 @@ export default function GraphView({
                   key={node.id}
                   type="button"
                   className="graph-node graph-node-glass"
+                  data-node-id={node.id}
                   {...glassFade}
-                  whileHover={motionEnabled ? { scale: 1.1 } : undefined}
+                  whileHover={motionEnabled ? { scale: HOVER_SCALE } : undefined}
                   transition={{ duration: 0.17 }}
-                  aria-label={t("{name}，单击居中，双击打开").replace("{name}", () => node.name)}
+                  aria-label={t("{name}，单击居中，双击查看局部图谱").replace("{name}", () => node.name)}
                   aria-pressed={node.id === centeredNodeId}
                   style={{
                     "--node-color": entityColors.get(node.id) ?? node.color,
                     "--graph-scale": worldScale,
-                    left: worldOffsetX + (node.x * WIDTH - extent.left - nodeRadius(node.name)) * worldScale,
-                    top: worldOffsetY + (node.y * HEIGHT - extent.top - NODE_HALF_HEIGHT) * worldScale,
+                    left: (node.x * WIDTH - viewLeft - nodeRadius(node.name)) * worldScale,
+                    top: (node.y * HEIGHT - viewTop - NODE_HALF_HEIGHT) * worldScale,
                     width: 2 * nodeRadius(node.name) * worldScale,
                     height: 2 * NODE_HALF_HEIGHT * worldScale,
                   } as CSSProperties}
                   onPointerDown={(event) => {
-                    if (event.button !== 0 || !writable) return;
+                    cameraAnimation.current?.stop();
+                    if (event.button !== 0 || !writable || !worldScale) return;
                     drag.current = {
                       id: node.id,
                       x: event.clientX,
                       y: event.clientY,
+                      worldX: node.x,
+                      worldY: node.y,
+                      scale: worldScale,
                       moved: false,
                     };
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -802,16 +923,18 @@ export default function GraphView({
           >
             <button
               role="menuitem"
-              onClick={() => {
-                resetFocus();
-                setFilterQuery("");
-                setFilterOpen(false);
-                setNodeMenu(null);
-                onRelatedGraph(nodeMenu.id);
-              }}
+              onClick={() => openNode(nodeMenu.id)}
             >
               <Network size={14} />
               {t("显示关联图谱")}
+            </button>
+            <button role="menuitem" onClick={() => {
+              resetFocus();
+              setNodeMenu(null);
+              onSelect(nodeMenu.id);
+            }}>
+              <BookOpen size={14} />
+              {t("打开词条")}
             </button>
             <button
               className="danger-menu-item"

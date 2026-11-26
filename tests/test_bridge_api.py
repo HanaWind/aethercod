@@ -38,6 +38,9 @@ def test_bridge_saves_favorites_and_graph_positions(tmp_path):
     node = next(item for item in api.get_graph()["nodes"] if item["id"] == saved["id"])
     assert node["x"] == pytest.approx(0.23)
     assert node["y"] == pytest.approx(0.71)
+    assert api.save_graph_layout({saved["id"]: {"x": -4.5, "y": 8.25}})
+    node = next(item for item in api.get_graph()["nodes"] if item["id"] == saved["id"])
+    assert (node["x"], node["y"]) == (-4.5, 8.25)
 
 
 def test_retired_polity_fields_stay_stored_but_are_hidden_from_editor(tmp_path):
@@ -88,19 +91,27 @@ def test_bridge_window_control_toggles_maximize():
         def restore(self):
             self.actions.append("restore")
 
+        def move(self, x, y):
+            self.actions.append(("move", x, y))
+
     api = BridgeAPI()
     window = FakeWindow()
     api.bind_window(window)
 
+    for invalid in (None, float("nan"), float("inf"), "10", True):
+        assert api.move_window(invalid, 20) is False
+        assert api.move_window(10, invalid) is False
+    assert api.move_window(10.8, -20.8) is True
     api.window_action("maximize")
     assert api.window_maximized() is True
+    assert api.move_window(10, 20) is False
     api.window_action("maximize")
     assert api.window_maximized() is False
     window.events.maximized.callbacks[0](window)
     assert api.window_maximized() is True
     window.events.restored.callbacks[0](window)
 
-    assert window.actions == ["maximize", "restore"]
+    assert window.actions == [("move", 10, -20), "maximize", "restore"]
     assert api._maximized is False
 
 
