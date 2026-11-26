@@ -6,7 +6,7 @@ export const NODE_HALF_HEIGHT = 36;
 export const nodeRadius = (name: string) => Math.max(72, Math.min(96, name.length * 8 + 36));
 
 export function initializeGraphLayout(nodes: GraphNode[]) {
-  // The margins include the stroke and the full range of ambient drift.
+  // Lay out a roomy starting grid. The viewport grows when nodes move beyond it.
   const cellWidth = 216;
   const cellHeight = 104;
   const columns = Math.max(4, Math.ceil(Math.sqrt(nodes.length * 0.7)));
@@ -25,8 +25,6 @@ export function initializeGraphLayout(nodes: GraphNode[]) {
   const positions = new Map<string, { x: number; y: number }>();
 
   const isFree = (x: number, y: number, radius: number) => {
-    if (x < radius + 12 || x > width - radius - 12 || y < 52 || y > height - 52)
-      return false;
     const column = Math.floor(x / cellWidth);
     const row = Math.floor(y / cellHeight);
     for (let dx = -1; dx <= 1; dx++) {
@@ -58,11 +56,19 @@ export function initializeGraphLayout(nodes: GraphNode[]) {
     positions.set(node.id, { x: point.x / width, y: point.y / height });
   }
 
-  // Arbitrary saved coordinates can block multiple slots. The complete grid always fits.
+  // Saved positions may collide with one another. Unplaced nodes use the open grid slots.
   if (positions.size !== nodes.length) {
-    ordered.forEach((node, index) => {
-      positions.set(node.id, { x: slots[index].x / width, y: slots[index].y / height });
-    });
+    for (const node of ordered) {
+      if (positions.has(node.id)) continue;
+      const radius = nodeRadius(node.name);
+      const slot = slots.find((point) => isFree(point.x, point.y, radius));
+      if (!slot) break;
+      const key = `${Math.floor(slot.x / cellWidth)},${Math.floor(slot.y / cellHeight)}`;
+      const bucket = occupied.get(key) ?? [];
+      bucket.push({ ...slot, radius });
+      occupied.set(key, bucket);
+      positions.set(node.id, { x: slot.x / width, y: slot.y / height });
+    }
   }
 
   return { width, height, nodes: nodes.map((node) => ({ ...node, ...positions.get(node.id) })) };

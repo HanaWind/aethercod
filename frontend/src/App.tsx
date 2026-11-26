@@ -197,7 +197,7 @@ function Workspace({
   const typeCreateInFlight = useRef(false);
   const [createValues, setCreateValues] = useState({
     name: "",
-    era_name: "泰拉纪元",
+    era_name: "",
     author: "",
     description: "",
   });
@@ -259,6 +259,19 @@ function Workspace({
   useEffect(() => {
     localStorage.setItem("aethercod-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const showStartupError = (event: Event) => {
+      const error = event as CustomEvent<string>;
+      window.dispatchEvent(new CustomEvent("aethercod:show-error", { detail: error.detail }));
+    };
+    window.addEventListener("aethercod:startup-error", showStartupError);
+    if (window.__aethercodStartupError) {
+      window.dispatchEvent(new CustomEvent("aethercod:show-error", { detail: window.__aethercodStartupError }));
+      delete window.__aethercodStartupError;
+    }
+    return () => window.removeEventListener("aethercod:startup-error", showStartupError);
+  }, []);
 
   useEffect(
     () => () => window.clearTimeout(statusToastTimer.current),
@@ -360,6 +373,12 @@ function Workspace({
     window.addEventListener("pywebviewready", onReady, { once: true });
     return () => window.removeEventListener("pywebviewready", onReady);
   }, [syncState]);
+
+  useEffect(() => {
+    const showStartupError = (event: Event) => setError((event as CustomEvent<string>).detail);
+    window.addEventListener("aethercod:show-error", showStartupError);
+    return () => window.removeEventListener("aethercod:show-error", showStartupError);
+  }, []);
 
   const loadEntity = useCallback(async (id: string, reveal = true) => {
     const api = desktopApi();
@@ -901,12 +920,17 @@ function Workspace({
 
   const createProject = async (event: React.FormEvent) => {
     event.preventDefault();
+    const eraName = createValues.era_name.trim();
+    if (!eraName) {
+      setError(translate(language, "纪年法名称不能为空"));
+      return;
+    }
     if (!(await flushDraft())) return;
     try {
       const next = await desktopApi()?.create_project(
         "",
         createValues.name,
-        createValues.era_name,
+        eraName,
         createValues.author,
         createValues.description,
       );
@@ -1222,6 +1246,10 @@ function Workspace({
               transition={{ type: "spring", stiffness: 340, damping: 38 }}
             >
               <div className="sidebar-top">
+                {!state.project ? (
+                  <div className="sidebar-brand-empty">AETHERCOD</div>
+                ) : (
+                <>
                 <button
                   className="library-selector"
                   onClick={(event) => openContextMenu(event, "library", "")}
@@ -1328,9 +1356,11 @@ function Workspace({
                     <span className="sidebar-action-label">{translate(language, "收藏夹")}</span>
                   </button>
                 </nav>
+                </>
+                )}
               </div>
 
-              <div className="sidebar-section-heading">
+              {state.project && <div className="sidebar-section-heading">
                 <span>{language === "en" ? "Entry Types" : "词条分类"}</span>
                 <div className="category-actions">
                   {state.project && (
@@ -1358,8 +1388,8 @@ function Workspace({
                     <ChevronsUpDown size={14} />
                   </button>
                 </div>
-              </div>
-              <ElasticScroll className="type-list">
+              </div>}
+              <ElasticScroll className={`type-list${state.project ? "" : " no-project"}`}>
                 <LayoutGroup id="entity-navigation">
                   {state.types.map((type) => {
                     const entries = state.entities.filter(
@@ -1466,7 +1496,7 @@ function Workspace({
                                     )}
                                     <span
                                       className="entity-dot"
-                                      style={{ background: entity.color }}
+                                      style={{ background: entity.color, "--node-color": entity.color } as React.CSSProperties}
                                     />
                                     <span className="entry-name">
                                       {entity.name}
@@ -1500,7 +1530,7 @@ function Workspace({
                 )}
               </ElasticScroll>
 
-              <div className="sidebar-bottom">
+              {state.project && <div className="sidebar-bottom">
                 <div className="library-count">
                   <span className="status-square" />
                   {state.entities.length} {translate(language, "词条")}
@@ -1517,7 +1547,7 @@ function Workspace({
                     </span>
                   </div>
                 </div>
-              </div>
+              </div>}
             </motion.aside>
           )}
         </AnimatePresence>
@@ -1634,6 +1664,15 @@ function Workspace({
             </div>
           )}
 
+          <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeView}
+            className="main-view-transition"
+            initial={motionEnabled ? { opacity: 0, y: 5 } : false}
+            animate={{ opacity: 1, y: 0 }}
+            exit={motionEnabled ? { opacity: 0, y: -3 } : { opacity: 1 }}
+            transition={{ duration: motionEnabled ? 0.16 : 0, ease: [0.22, 1, 0.36, 1] }}
+          >
           {activeView === "settings" && state.project ? (
             <SettingsView
               key={`${state.project.path}-${settingsTab}-${settingsTypeId}`}
@@ -1703,7 +1742,7 @@ function Workspace({
                       key={entity.id}
                       onClick={() => void selectEntity(entity)}
                     >
-                      <span className="entity-dot" style={{ background: entity.color }} />
+                      <span className="entity-dot" style={{ background: entity.color, "--node-color": entity.color } as React.CSSProperties} />
                       <span className="favorite-row-copy">
                         <strong>{entity.name}</strong>
                         <small>{entity.summary || (typeById(entity.type_id) ? displayTypeName(language, typeById(entity.type_id)!) : "")}</small>
@@ -2264,6 +2303,8 @@ function Workspace({
                 </motion.article>
             </ElasticScroll>
           )}
+          </motion.div>
+          </AnimatePresence>
         </main>
 
         <AnimatePresence initial={false}>
@@ -2758,6 +2799,7 @@ function Workspace({
                 {language === "en" ? "Calendar Era" : "纪年法名称"}
                 <input
                   value={createValues.era_name}
+                  placeholder={language === "en" ? "e.g. Era of the First Dawn" : "例如：泰拉纪元"}
                   onChange={(event) =>
                     setCreateValues((value) => ({
                       ...value,

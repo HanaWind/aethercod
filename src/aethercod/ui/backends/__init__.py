@@ -1,4 +1,4 @@
-"""项目管理Backend - 从QmlBackend拆分出来。"""
+"""Qt widget project-management backend."""
 
 from __future__ import annotations
 

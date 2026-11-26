@@ -29,15 +29,6 @@ const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value
 type NodeMenu = { id: string; x: number; y: number } | null;
 type Point = { x: number; y: number };
 
-function floatStyle(node: GraphNode, enabled: boolean): CSSProperties | undefined {
-  if (!enabled) return;
-  const seed = Number.parseInt(node.id.slice(0, 4), 16) || 0;
-  return {
-    "--float-duration": `${8 + (seed % 31) / 5}s`,
-    "--float-delay": `-${(seed % 97) / 10}s`,
-  } as CSSProperties;
-}
-
 export default function GraphView({
   graph,
   language,
@@ -86,6 +77,9 @@ export default function GraphView({
   const [nodeMenu, setNodeMenu] = useState<NodeMenu>(null);
   const [filterQuery, setFilterQuery] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const zoomAnchor = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
+  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const drag = useRef<{
     id: string;
     x: number;
@@ -109,7 +103,7 @@ export default function GraphView({
   const nodeScale = viewScale * renderedZoom;
 
   useLayoutEffect(() => {
-    const element = viewportElement.current;
+    const element = canvas.current;
     if (!element) return;
     const measure = () => setViewport({
       width: element.clientWidth,
@@ -128,15 +122,18 @@ export default function GraphView({
     };
     if (!motionEnabled) {
       update(zoom);
+      requestAnimationFrame(() => { zoomAnchor.current = null; });
       return;
     }
     const animation = animate(zoomFrame.current, zoom, {
       duration: 0.16,
       ease: [0.22, 1, 0.36, 1],
       onUpdate: update,
+      onComplete: () => { zoomAnchor.current = null; },
     });
     return () => animation.stop();
   }, [motionEnabled, zoom]);
+
   const baseNodes = useMemo(
     () => initialNodes.map((node) => ({ ...node, ...positions[node.id] })),
     [initialNodes, positions],
@@ -145,6 +142,35 @@ export default function GraphView({
     () => baseNodes.map((node) => ({ ...node, ...focusPositions[node.id] })),
     [baseNodes, focusPositions],
   );
+  const extent = useMemo(() => {
+    if (!nodes.length) return { left: 0, top: 0, width: WIDTH, height: HEIGHT };
+    const xs = nodes.map((node) => node.x * WIDTH);
+    const ys = nodes.map((node) => node.y * HEIGHT);
+    const left = Math.min(0, ...nodes.map((node, index) => xs[index] - nodeRadius(node.name) - 48));
+    const top = Math.min(0, ...ys.map((y) => y - NODE_HALF_HEIGHT - 48));
+    const right = Math.max(WIDTH, ...nodes.map((node, index) => xs[index] + nodeRadius(node.name) + 48));
+    const bottom = Math.max(HEIGHT, ...ys.map((y) => y + NODE_HALF_HEIGHT + 48));
+    return { left, top, width: right - left, height: bottom - top };
+  }, [HEIGHT, WIDTH, nodes]);
+  const worldWidth = extent.width * nodeScale;
+  const worldHeight = extent.height * nodeScale;
+  const worldScale = nodeScale;
+  const worldOffsetX = 0;
+  const worldOffsetY = 0;
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    const element = canvas.current;
+    if (!anchor || !element) return;
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const originX = bounds.left + element.clientLeft + parseFloat(style.paddingLeft);
+    const originY = bounds.top + element.clientTop + parseFloat(style.paddingTop);
+    const contentX = worldOffsetX + (anchor.x - extent.left) * worldScale;
+    const contentY = worldOffsetY + (anchor.y - extent.top) * worldScale;
+    element.scrollLeft = contentX - (anchor.clientX - originX);
+    element.scrollTop = contentY - (anchor.clientY - originY);
+  }, [extent, worldOffsetX, worldOffsetY, worldScale, worldWidth, worldHeight]);
   const edges = useMemo(() => {
     const byId = new Map(nodes.map((node) => [node.id, node]));
     return graph.edges
@@ -224,11 +250,51 @@ export default function GraphView({
       event.stopPropagation();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
       const factor = Math.exp(-event.deltaY * unit * 0.0012);
-      setZoom((current) => clampZoom(current * factor));
+      const bounds = viewportElement.current?.getBoundingClientRect();
+      if (bounds) {
+        zoomAnchor.current = {
+          x: extent.left + (event.clientX - bounds.left - worldOffsetX) / worldScale,
+          y: extent.top + (event.clientY - bounds.top - worldOffsetY) / worldScale,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        };
+      }
+      setZoom((current) => {
+        const next = clampZoom(current * factor);
+        if (next === current) requestAnimationFrame(() => { zoomAnchor.current = null; });
+        return next;
+      });
     };
     element.addEventListener("wheel", zoomFromWheel, { passive: false });
     return () => element.removeEventListener("wheel", zoomFromWheel);
-  }, []);
+  }, [extent, worldOffsetX, worldOffsetY, worldScale]);
+
+  const startPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as Element).closest(".graph-node-glass, button, input")) return;
+    const element = canvas.current;
+    if (!element) return;
+    panStart.current = {
+      x: event.clientX,
+      y: event.clientY,
+      left: element.scrollLeft,
+      top: element.scrollTop,
+    };
+    setPanning(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePan = (event: PointerEvent<HTMLDivElement>) => {
+    const start = panStart.current;
+    const element = canvas.current;
+    if (!start || !element) return;
+    element.scrollLeft = start.left - (event.clientX - start.x);
+    element.scrollTop = start.top - (event.clientY - start.y);
+  };
+
+  const finishPan = () => {
+    panStart.current = null;
+    setPanning(false);
+  };
 
   const moveNode = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
@@ -251,8 +317,8 @@ export default function GraphView({
     setPositions((previous) => ({
       ...previous,
       [current.id]: {
-        x: Math.max(0.05, Math.min(0.95, point.x / WIDTH)),
-        y: Math.max(0.05, Math.min(0.9, point.y / HEIGHT)),
+        x: point.x / WIDTH,
+        y: point.y / HEIGHT,
       },
     }));
     dragHoldTimer.current = window.setTimeout(
@@ -275,11 +341,6 @@ export default function GraphView({
       currentNodes.map((node) => [node.id, { x: node.x * WIDTH, y: node.y * HEIGHT }]),
     );
     const byId = new Map(currentNodes.map((node) => [node.id, node]));
-    const clamp = (node: GraphNode, point: Point) => ({
-      x: Math.max(nodeRadius(node.name) + 12, Math.min(WIDTH - nodeRadius(node.name) - 12, point.x)),
-      y: Math.max(48, Math.min(HEIGHT - 48, point.y)),
-    });
-
     for (let pass = 0; pass < 8; pass += 1) {
       let moved = false;
       for (let leftIndex = 0; leftIndex < currentNodes.length; leftIndex += 1) {
@@ -307,10 +368,10 @@ export default function GraphView({
           const target = right.id === anchorId ? left : right;
           const direction = target.id === right.id ? 1 : -1;
           const targetPoint = points.get(target.id)!;
-          const next = clamp(target, {
+          const next = {
             x: targetPoint.x + direction * nx * requiredX * push,
             y: targetPoint.y + direction * ny * requiredY * push,
-          });
+          };
           if (Math.hypot(next.x - targetPoint.x, next.y - targetPoint.y) > 0.5) {
             points.set(target.id, next);
             moved = true;
@@ -598,20 +659,22 @@ export default function GraphView({
           </button>
         </div>
       </header>
-      <div className="graph-canvas-wrap" ref={canvas}
-        onPointerMove={moveNode} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
-        <div className="graph-viewport" ref={viewportElement}>
+      <div className={`graph-canvas-wrap${panning ? " is-panning" : ""}`} ref={canvas}
+        onPointerDown={startPan}
+        onPointerMove={(event) => { movePan(event); moveNode(event); }}
+        onPointerUp={() => { finishPan(); finishDrag(); }}
+        onPointerCancel={() => { finishPan(); finishDrag(); }}>
+        <div className="graph-viewport" ref={viewportElement}
+          style={{ width: worldWidth, height: worldHeight }}>
         {visibleGraph.nodes.length ? (
           <>
           <svg
             className="graph-canvas"
-            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+            viewBox={`${extent.left} ${extent.top} ${extent.width} ${extent.height}`}
+            style={{ width: worldWidth, height: worldHeight }}
             aria-hidden="true"
           >
-            <g
-              ref={scene}
-              transform={`translate(${WIDTH / 2} ${HEIGHT / 2}) scale(${renderedZoom}) translate(${-WIDTH / 2} ${-HEIGHT / 2})`}
-            >
+            <g ref={scene}>
               <defs>
                 {/* Cut the edges out below the glass while keeping the canvas visible. */}
                 <mask
@@ -626,8 +689,6 @@ export default function GraphView({
                   {visibleGraph.nodes.map((node) => (
                     <g key={node.id} transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}>
                       <ellipse
-                        className="graph-node-drift"
-                        style={floatStyle(node, motionEnabled && node.id !== centeredNodeId)}
                         rx={nodeRadius(node.name)}
                         ry={NODE_HALF_HEIGHT}
                         fill="black"
@@ -666,6 +727,7 @@ export default function GraphView({
             </g>
           </svg>
           <div className="graph-node-layer" role="group"
+            style={{ width: worldWidth, height: worldHeight }}
             aria-label={t(relatedEntityId ? "词条关联图谱" : "词条关系网")}>
               <AnimatePresence initial={false}>
                 {[...visibleGraph.nodes].sort((left, right) =>
@@ -676,17 +738,17 @@ export default function GraphView({
                   type="button"
                   className="graph-node graph-node-glass"
                   {...glassFade}
+                  whileHover={motionEnabled ? { scale: 1.1 } : undefined}
                   transition={{ duration: 0.17 }}
                   aria-label={t("{name}，单击居中，双击打开").replace("{name}", () => node.name)}
                   aria-pressed={node.id === centeredNodeId}
                   style={{
-                    ...floatStyle(node, motionEnabled && node.id !== centeredNodeId),
                     "--node-color": entityColors.get(node.id) ?? node.color,
-                    "--graph-scale": nodeScale,
-                    left: viewport.width / 2 + ((node.x - 0.5) * WIDTH - nodeRadius(node.name)) * nodeScale,
-                    top: viewport.height / 2 + ((node.y - 0.5) * HEIGHT - NODE_HALF_HEIGHT) * nodeScale,
-                    width: 2 * nodeRadius(node.name) * nodeScale,
-                    height: 2 * NODE_HALF_HEIGHT * nodeScale,
+                    "--graph-scale": worldScale,
+                    left: worldOffsetX + (node.x * WIDTH - extent.left - nodeRadius(node.name)) * worldScale,
+                    top: worldOffsetY + (node.y * HEIGHT - extent.top - NODE_HALF_HEIGHT) * worldScale,
+                    width: 2 * nodeRadius(node.name) * worldScale,
+                    height: 2 * NODE_HALF_HEIGHT * worldScale,
                   } as CSSProperties}
                   onPointerDown={(event) => {
                     if (event.button !== 0 || !writable) return;

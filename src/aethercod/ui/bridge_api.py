@@ -111,6 +111,8 @@ class BridgeAPI:
             if self._maximized:
                 self._window.restore()
                 self._maximized = False
+            elif sys.platform == "win32" and self._maximize_to_work_area():
+                self._maximized = True
             else:
                 self._window.maximize()
                 self._maximized = True
@@ -124,6 +126,45 @@ class BridgeAPI:
             except Exception:
                 self._window_close_approved = False
                 raise
+
+    def _maximize_to_work_area(self) -> bool:
+        """Size the frameless WinForms window to the current monitor work area."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class Rect(ctypes.Structure):
+                _fields_ = [(name, wintypes.LONG) for name in ("left", "top", "right", "bottom")]
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", Rect), ("rcWork", Rect), ("dwFlags", wintypes.DWORD)]
+
+            native = getattr(self._window, "native", None)
+            handle = int(native.Handle.ToInt64()) if native is not None else 0
+            if not handle:
+                return False
+            user32 = ctypes.windll.user32
+            user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+            user32.MonitorFromWindow.restype = ctypes.c_void_p
+            user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MonitorInfo)]
+            user32.GetMonitorInfoW.restype = wintypes.BOOL
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, wintypes.UINT,
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+            monitor = user32.MonitorFromWindow(wintypes.HWND(handle), 2)
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(MonitorInfo)
+            if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return False
+            work = info.rcWork
+            return bool(user32.SetWindowPos(
+                wintypes.HWND(handle), None, work.left, work.top,
+                work.right - work.left, work.bottom - work.top, 0x0014,
+            ))
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
 
     def _require_service(self) -> ProjectService:
         if self._service is None:
@@ -352,7 +393,7 @@ class BridgeAPI:
         self,
         path: str = "",
         name: str = "新的世界",
-        era_name: str = "泰拉纪元",
+        era_name: str = "",
         author: str = "",
         description: str = "",
     ) -> dict[str, Any]:

@@ -8,6 +8,13 @@ import pytest
 from aethercod.ui.bridge_api import BridgeAPI
 
 
+def test_create_project_requires_explicit_calendar_era(tmp_path):
+    api = BridgeAPI()
+    with pytest.raises(ValueError, match="纪年法名称不能为空"):
+        api.create_project(str(tmp_path / "missing-era.aethercod"), "World")
+    assert not (tmp_path / "missing-era.aethercod").exists()
+
+
 def test_bridge_empty_state_includes_save_defaults():
     state = BridgeAPI().get_state()
     assert state["project"] is None
@@ -104,7 +111,7 @@ def test_native_close_is_deferred_until_the_frontend_approves(tmp_path):
     from webview.event import Event as WindowEvent
 
     api = BridgeAPI()
-    api.create_project(str(tmp_path / "close.aethercod"))
+    api.create_project(str(tmp_path / "close.aethercod"), "Close test", "Test Era")
     notified = Event()
     window = Mock(maximized=False)
     window.events.maximized = WindowEvent(window)

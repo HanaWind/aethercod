@@ -11,6 +11,7 @@ Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、�
 ### 资料库
 
 - 新建资料库时可设置资料库名称、纪年法名称、作者和说明。
+- `samples/Aethercod_Demo.aethercod` 提供包含全部内置类型的完整演示资料库。
 - 打开、关闭和备份 `.aethercod` 项目，也兼容旧的 `.db`、`.sqlite` 和 `.sqlite3` 文件。
 - 在“资料库设置”中随时修改项目元数据。
 - 完整资料库可导出为 JSON，也可按 UUID 合并导入另一份资料。
@@ -67,7 +68,7 @@ Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、�
 - 可在完整关系网和当前词条的直接关联网络之间切换，也可组合多个词条筛选。
 - 毛玻璃节点保持轻微漂浮，可拖动、使用滚轮缩放；释放时会排开重叠节点并把位置保存到资料库。
 - 单击节点居中，再次单击还原位置；双击可打开对应词条。
-- 兼容 QML / QWidget 关系图支持按节点和连线范围导出 PNG。
+- 兼容 QWidget 关系图支持按节点和连线范围导出 PNG。
 
 ### 数据校验
 
@@ -91,7 +92,7 @@ Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、�
 - 关系网支持词条筛选、拖动避让和持久化布局。可从词条详情、时间线或节点右键菜单查看单词条的关联图谱。
 - 保存机制可设置为手动保存、分钟间隔自动保存或实时自动保存，手动保存也可用于定时模式。
 - 时间线事件可记录详细说明，并在时间线视图中打开详情弹窗。
-- QML 和 QWidget 兼容界面仍保留，可通过环境变量启动。
+- QWidget 兼容界面仍保留，可通过环境变量启动。
 
 ## 快速开始
 
@@ -100,7 +101,7 @@ Aethercod 是一个本地优先的奇幻世界观资料库。它使用词条、�
 - Python 3.11 或更高版本
 - pywebview 5.3 或更高版本
 - Node.js 20.19 或更高版本及 npm，用于构建前端静态资源
-- PySide6 6.7 或更高版本，仅用于运行兼容 Qt 界面和对应测试
+- PySide6 6.7 或更高版本，仅用于运行 QWidget 兼容界面和对应测试
 
 Windows PowerShell 示例：
 
@@ -120,7 +121,9 @@ cd ..
 python -m aethercod
 ```
 
-只运行桌面前端时可安装 `aethercod` 本体依赖。`.[dev]` 会额外安装 Qt，用于测试和开发旧界面；只需兼容界面时可安装 `.[legacy-ui]`。
+Windows 安装版注册 `.aethercod` 文件关联，双击资料库文件即可直接打开。
+
+只运行桌面前端时可安装 `aethercod` 本体依赖。`.[dev]` 会额外安装 Qt，用于测试和开发 QWidget 兼容界面；只需兼容界面时可安装 `.[legacy-ui]`。
 
 安装后也可以使用：
 
@@ -146,13 +149,10 @@ python -m aethercod
 
 ### 兼容界面
 
-旧 QML 与 QWidget 界面仍保留用于兼容和辅助迁移：
+旧 QWidget 界面仍保留用于辅助迁移：
 
 ```powershell
 $env:AETHERCOD_UI = "widgets"
-python -m aethercod
-# 或使用旧 QML 工作台
-$env:AETHERCOD_UI = "qml"
 python -m aethercod
 ```
 
@@ -232,14 +232,11 @@ src/aethercod/
 └── ui/
     ├── webview_app.py      # pywebview 桌面窗口
     ├── bridge_api.py       # pywebview js_api 与领域服务适配层
-    ├── qml_app.py          # Qt Quick 应用初始化
-    ├── qml_backend.py      # 兼容 QML 的数据层适配
-    ├── qml/Main.qml        # 兼容 QML 工作台
     ├── main_window.py      # 兼容 QWidget 界面
     ├── graph_view.py       # 兼容界面的关系图
     └── timeline_view.py    # 兼容界面的时间线
 
-tests/                      # 数据层、交换层和 Qt 界面测试
+tests/                      # 数据层、交换层和 QWidget 界面测试
 frontend/                   # Vite、React、TypeScript 与 Tailwind CSS 工程
 ```
 
@@ -270,6 +267,6 @@ python -m pytest -q
 
 ## 当前限制
 
-- 数据校验和 SQLite 在线备份目前仍在兼容 QML / QWidget 界面中提供。
+- 数据校验和 SQLite 在线备份目前仍在兼容 QWidget 界面中提供。
 - 删除词条使用软删除保留数据，React 工作台尚未提供回收站管理页面。
 - 应用面向单机资料库，没有多人实时同步和权限系统。

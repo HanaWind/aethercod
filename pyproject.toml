@@ -31,7 +31,6 @@ aethercod = [
     "resources/*.svg",
     "resources/*.ico",
     "resources/*.png",
-    "ui/qml/*.qml",
     "frontend_dist/*",
     "frontend_dist/assets/*",
 ]
