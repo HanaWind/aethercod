@@ -444,14 +444,38 @@ const textUi: Record<string, string> = {
   "每个词条均需一个名称": "Every entry needs a name",
 };
 
+const timelineText = {
+  "时间线展示方案": "Timeline view",
+  "时间线默认展示方案": "Default timeline view",
+  "经典列表": "Classic List",
+  "中轴编年": "Chronicle",
+  "散点概览": "Scatter Overview",
+  "纪元分界": "Era boundaries",
+  "纪元起始年份": "Era start year",
+  "纪元名称": "Era name",
+  "添加分界": "Add boundary",
+  "移除分界": "Remove boundary",
+  "纪年起点": "Calendar origin",
+  "+{count} 年": "+{count} years",
+  "时间窗口": "Year range",
+  "全部年份": "All years",
+  "平移时间窗口": "Move year range",
+  "按年代跳转": "Jump to decade",
+};
+
 const pickerAndGraphText = {
+  "返回完整图谱": "Full Graph",
   "跳数": "Hops",
   "减少跳数": "Decrease hops",
   "增加跳数": "Increase hops",
   "最大": "Max",
   "全部连通": "Show all connected entries",
   "局部图谱": "Local Graph",
-  "返回完整图谱": "Back to Full Graph",
+  "布局": "Layout",
+  "聚类": "Cluster",
+  "同心": "Concentric",
+  "同心圆布局": "Concentric layout",
+  "类型聚类布局": "Type-cluster layout",
   "按词条类型筛选": "Filter by entry type",
   "清除类型筛选": "Clear type filters",
   "选择词条颜色": "Choose entry color",
@@ -518,7 +542,7 @@ const pickerAndGraphText = {
   "重试": "Retry",
 };
 
-const text: Record<string, string> = { ...baseText, ...textExtra, ...textAdditional, ...textUi, ...pickerAndGraphText };
+const text: Record<string, string> = { ...baseText, ...textExtra, ...textAdditional, ...textUi, ...pickerAndGraphText, ...timelineText };
 
 const builtInTypes: Record<string, string> = {
   person: "Person",

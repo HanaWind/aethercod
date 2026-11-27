@@ -32,6 +32,184 @@ export function graphDistances(edges: GraphData["edges"], center: string) {
   return distances;
 }
 
+export function degreeById(nodes: GraphNode[], edges: GraphData["edges"]) {
+  const degree = new Map(nodes.map(({ id }) => [id, 0]));
+  for (const edge of edges) {
+    degree.set(edge.source_id, (degree.get(edge.source_id) ?? 0) + 1);
+    degree.set(edge.target_id, (degree.get(edge.target_id) ?? 0) + 1);
+  }
+  return degree;
+}
+
+export function layoutLocalSectors(nodes: GraphNode[], edges: GraphData["edges"], centerId: string) {
+  const distances = graphDistances(edges, centerId);
+  const neighbors = new Map<string, string[]>();
+  for (const { source_id, target_id } of edges) {
+    neighbors.set(source_id, [...(neighbors.get(source_id) ?? []), target_id]);
+    neighbors.set(target_id, [...(neighbors.get(target_id) ?? []), source_id]);
+  }
+  const ordered = [...nodes].sort((a, b) => a.type_id.localeCompare(b.type_id) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  const levels = new Map<number, GraphNode[]>();
+  for (const node of ordered) {
+    const distance = distances.get(node.id);
+    if (distance === undefined || distance === 0) continue;
+    const level = levels.get(distance) ?? [];
+    level.push(node);
+    levels.set(distance, level);
+  }
+  const positions = new Map<string, { x: number; y: number }>([[centerId, { x: 0, y: 0 }]]);
+  const centers = new Map<string, number>([[centerId, -Math.PI / 2]]);
+  let previousRadius = 0;
+  const maximumLevel = Math.max(0, ...levels.keys());
+  for (let distance = 1; distance <= maximumLevel; distance++) {
+    const ring = levels.get(distance) ?? [];
+    if (!ring.length) continue;
+    const radius = previousRadius + Math.max(430, ring.length * 260 / (Math.PI * 2));
+    const sectors = new Map<number, GraphNode[]>();
+    for (const node of ring) {
+      const parentAngles = (neighbors.get(node.id) ?? [])
+        .filter((id) => distances.get(id) === distance - 1)
+        .map((id) => centers.get(id))
+        .filter((angle): angle is number => angle !== undefined);
+      const parentAngle = parentAngles.length
+        ? Math.atan2(parentAngles.reduce((sum, angle) => sum + Math.sin(angle), 0), parentAngles.reduce((sum, angle) => sum + Math.cos(angle), 0))
+        : -Math.PI / 2;
+      const sector = Math.round(((parentAngle + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * Math.max(1, Math.ceil(Math.sqrt(ring.length))));
+      const group = sectors.get(sector) ?? [];
+      group.push(node);
+      sectors.set(sector, group);
+    }
+    const groups = [...sectors.entries()].sort(([a], [b]) => a - b);
+    const slots = groups.flatMap(([, group]) => group);
+    slots.forEach((node, index) => {
+      const angle = -Math.PI / 2 + index / slots.length * Math.PI * 2;
+      const key = node.id;
+      centers.set(key, angle);
+      positions.set(key, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    });
+    previousRadius = radius;
+  }
+  let extent = 600;
+  for (const point of positions.values()) extent = Math.max(extent, Math.abs(point.x), Math.abs(point.y));
+  const width = Math.max(DEFAULT_WIDTH, DEFAULT_HEIGHT, extent * 2 + 240);
+  const height = width;
+  return {
+    width,
+    height,
+    nodes: nodes.map((node) => {
+      const point = positions.get(node.id) ?? { x: 0, y: 0 };
+      return { ...node, x: 0.5 + point.x / width, y: 0.5 + point.y / height };
+    }),
+  };
+}
+
+export function layoutTypeClusters(nodes: GraphNode[], edges: GraphData["edges"]) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const adjacency = new Map(nodes.map(({ id }) => [id, [] as string[]]));
+  for (const { source_id, target_id } of edges) {
+    adjacency.get(source_id)?.push(target_id);
+    adjacency.get(target_id)?.push(source_id);
+  }
+  const visited = new Set<string>();
+  const components: GraphNode[][] = [];
+  for (const node of nodes) {
+    if (visited.has(node.id)) continue;
+    const queue = [node.id];
+    visited.add(node.id);
+    const component: GraphNode[] = [];
+    for (let index = 0; index < queue.length; index++) {
+      const current = queue[index];
+      const item = byId.get(current);
+      if (item) component.push(item);
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+    components.push(component);
+  }
+  components.sort((a, b) => b.length - a.length || a[0].id.localeCompare(b[0].id));
+  const positions = new Map<string, PointLike>();
+  const componentGap = 360;
+  const columns = Math.max(1, Math.ceil(Math.sqrt(components.length)));
+  const maxTypeCount = Math.max(1, ...components.map((component) => new Set(component.map(({ type_id }) => type_id)).size));
+  const maxTypeSize = Math.max(1, ...components.flatMap((component) =>
+    [...new Set(component.map(({ type_id }) => type_id))].map((typeId) =>
+      component.filter((node) => node.type_id === typeId).length,
+    ),
+  ));
+  const typeGrid = Math.ceil(Math.sqrt(maxTypeCount));
+  const groupSide = Math.max(420, Math.ceil(Math.sqrt(maxTypeSize)) * (cellWidth + 32));
+  const tileSize = Math.max(820, typeGrid * groupSide);
+  components.forEach((component, componentIndex) => {
+    const groups = new Map<string, GraphNode[]>();
+    for (const node of component) {
+      const group = groups.get(node.type_id) ?? [];
+      group.push(node);
+      groups.set(node.type_id, group);
+    }
+    const types = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const cell = cellWidth + 64;
+    const column = componentIndex % columns;
+    const row = Math.floor(componentIndex / columns);
+    const originX = column * (tileSize + componentGap);
+    const originY = row * (tileSize + componentGap);
+    types.forEach(([, group], typeIndex) => {
+      const typeColumns = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(group.length))));
+      const typeRows = Math.ceil(group.length / typeColumns);
+      const groupColumn = typeIndex % typeGrid;
+      const groupRow = Math.floor(typeIndex / typeGrid);
+      const centerX = originX + groupColumn * groupSide + groupSide / 2;
+      const centerY = originY + groupRow * groupSide + groupSide / 2;
+      group.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      group.forEach((node, index) => positions.set(node.id, {
+        x: centerX + (index % typeColumns - (typeColumns - 1) / 2) * cell,
+        y: centerY + (Math.floor(index / typeColumns) - (typeRows - 1) / 2) * cellHeight * 1.8 + typeIndex * 0.01,
+      }));
+    });
+  });
+  const result = nodes.map((node) => ({ ...node, ...(positions.get(node.id) ?? { x: 0, y: 0 }) }));
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const node of result) {
+    left = Math.min(left, node.x);
+    right = Math.max(right, node.x);
+    top = Math.min(top, node.y);
+    bottom = Math.max(bottom, node.y);
+  }
+  const width = Math.max(1000, right - left + 2 * cellWidth);
+  const height = Math.max(700, bottom - top + 2 * cellHeight);
+  return { width, height, nodes: result.map((node) => ({ ...node,
+    x: (node.x - (left + right) / 2) / width + 0.5,
+    y: (node.y - (top + bottom) / 2) / height + 0.5,
+  })) };
+}
+
+export function layoutGlobalConcentric(nodes: GraphNode[], edges: GraphData["edges"]) {
+  const degrees = degreeById(nodes, edges);
+  const ordered = [...nodes].sort((a, b) => a.type_id.localeCompare(b.type_id) ||
+    (degrees.get(b.id) ?? 0) - (degrees.get(a.id) ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  const positions = new Map<string, PointLike>();
+  const rings = Math.max(1, Math.ceil(Math.sqrt(ordered.length / 8)));
+  let index = 0;
+  for (let ring = 1; ring <= rings; ring++) {
+    const count = Math.min(ordered.length - index, Math.max(8, ring * 12));
+    const radius = ring * 360;
+    for (let slot = 0; slot < count; slot++) {
+      const angle = -Math.PI / 2 + slot / count * Math.PI * 2;
+      positions.set(ordered[index++].id, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    }
+  }
+  const width = Math.max(1400, (rings + 1) * 720);
+  const height = width;
+  return { width, height, nodes: nodes.map((node) => {
+    const point = positions.get(node.id) ?? { x: 0, y: 0 };
+    return { ...node, x: 0.5 + point.x / width, y: 0.5 + point.y / height };
+  }) };
+}
+
+type PointLike = { x: number; y: number };
+
 export function initializeGraphLayout(nodes: GraphNode[]) {
   // Lay out a roomy starting grid. The viewport grows when nodes move beyond it.
   const columns = Math.max(4, Math.ceil(Math.sqrt(nodes.length * 0.7)));

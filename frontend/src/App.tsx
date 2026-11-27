@@ -59,6 +59,7 @@ import { formatWorldDate } from "./worldDate";
 import GraphView from "./GraphView";
 import SettingsView from "./SettingsView";
 import TimelineView from "./TimelineView";
+import { readTimelineMode, timelineModeKey, type TimelineMode } from "./timelinePreferences";
 import ElasticScroll from "./ElasticScroll";
 import { propertyLayout } from "./propertyLayout";
 import TypeIconPicker, { getTypeIcon } from "./TypeIconPicker";
@@ -92,6 +93,7 @@ function App() {
   const [transitionsEnabled, setTransitionsEnabled] = useState(
     () => localStorage.getItem("aethercod-transitions") !== "off",
   );
+  const [timelineMode, setTimelineMode] = useState(readTimelineMode);
   const prefersReducedMotion = useReducedMotion();
   const motionEnabled = transitionsEnabled && !prefersReducedMotion;
 
@@ -107,6 +109,11 @@ function App() {
           motionEnabled={motionEnabled}
           particlesEnabled={particlesEnabled}
           transitionsEnabled={transitionsEnabled}
+          timelineMode={timelineMode}
+          onTimelineModeChange={(mode) => {
+            localStorage.setItem(timelineModeKey, mode);
+            setTimelineMode(mode);
+          }}
           language={language}
           onLanguageChange={(next) => {
             localStorage.setItem("aethercod-language", next);
@@ -130,6 +137,8 @@ function Workspace({
   motionEnabled,
   particlesEnabled,
   transitionsEnabled,
+  timelineMode,
+  onTimelineModeChange,
   language,
   onLanguageChange,
   onParticlesChange,
@@ -138,6 +147,8 @@ function Workspace({
   motionEnabled: boolean;
   particlesEnabled: boolean;
   transitionsEnabled: boolean;
+  timelineMode: TimelineMode;
+  onTimelineModeChange: (mode: TimelineMode) => void;
   language: Language;
   onLanguageChange: (language: Language) => void;
   onParticlesChange: (enabled: boolean) => void;
@@ -1763,13 +1774,20 @@ function Workspace({
               transitionsEnabled={transitionsEnabled}
               onParticlesChange={onParticlesChange}
               onTransitionsChange={onTransitionsChange}
+              timelineMode={timelineMode}
+              onTimelineModeChange={onTimelineModeChange}
             />
           ) : activeView === "timeline" && state.project ? (
             <TimelineView
               events={globalTimeline}
               types={state.types}
               era={state.project.era_name}
+              projectPath={state.project.path}
+              entities={state.entities}
               language={language}
+              mode={timelineMode}
+              onModeChange={onTimelineModeChange}
+              motionEnabled={motionEnabled}
               onSelect={selectById}
               onRelatedGraph={openRelatedGraph}
             />
@@ -2503,7 +2521,7 @@ function Workspace({
                   {timeline.slice(0, 6).map((event) => (
                     <div className="inspector-date" key={event.id}>
                       <span>
-                        {formatWorldDate(event, state.project?.era_name ?? "")}
+                        {formatWorldDate(event, state.project?.era_name ?? "", language)}
                       </span>
                       <strong>{event.label || event.date_kind}</strong>
                     </div>

@@ -28,16 +28,25 @@ import {
 } from "react";
 import type { EntitySummary, EntityType, GraphData, GraphNode } from "./api";
 import Dropdown from "./Dropdown";
-import { graphDistances, HOVER_SCALE, initializeGraphLayout, NODE_HALF_HEIGHT, nodeRadius, separateGraphNodes } from "./graphLayout";
+import { degreeById, graphDistances, HOVER_SCALE, layoutGlobalConcentric, layoutLocalSectors, layoutTypeClusters, NODE_HALF_HEIGHT, nodeRadius, separateGraphNodes } from "./graphLayout";
 import { glassFade, glassSlide } from "./glassMotion";
 import { displayTypeName, translate, type Language } from "./i18n";
 
 const MIN_ZOOM = 0.35;
-const MAX_ZOOM = 2.2;
+const MAX_ZOOM = 5;
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+function edgeGeometry(source: GraphNode, target: GraphNode, index: number, count: number) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const offset = (index - (count - 1) / 2) * Math.min(0.16, 0.045 + 0.012 * count);
+  return { controlX: (source.x + target.x) / 2 - dy / length * offset,
+    controlY: (source.y + target.y) / 2 + dx / length * offset };
+}
 type NodeMenu = { id: string; x: number; y: number } | null;
 type Point = { x: number; y: number };
 type Camera = { center: Point | null; zoom: number };
+type LayoutMode = "cluster" | "concentric";
 const EMPTY_TYPES: string[] = [];
 
 export default function GraphView({
@@ -87,6 +96,9 @@ export default function GraphView({
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
+  const [layoutAnimation, setLayoutAnimation] = useState<Record<string, Point>>({});
+  const [layoutPreference, setLayoutPreference] = useState<{ centerId: string; mode: LayoutMode }>({ centerId: relatedEntityId, mode: relatedEntityId ? "concentric" : "cluster" });
+  const layoutMode = layoutPreference.centerId === relatedEntityId ? layoutPreference.mode : relatedEntityId ? "concentric" : "cluster";
   const [camera, setCamera] = useState<Camera>({ center: null, zoom: 1 });
   const cameraAnimation = useRef<{ stop: () => void } | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -117,16 +129,28 @@ export default function GraphView({
   const dragHoldTimer = useRef<number | undefined>(undefined);
   const displayedFocus = useRef<Record<string, Point>>({});
   const positionAnimation = useRef(0);
+  const layoutAnimationFrame = useRef(0);
+  const hasRenderedLayout = useRef(false);
+  const displayedLayout = useRef<Record<string, Point>>({});
   const canvas = useRef<HTMLDivElement>(null);
   const lineMaskId = useId();
   const hopInputId = useId();
-  const { nodes: initialNodes, width: WIDTH, height: HEIGHT } = useMemo(
-    () => initializeGraphLayout(graph.nodes),
-    [graph.nodes],
-  );
+  const calculatedLayout = useMemo(() => {
+    if (layoutMode === "concentric" && relatedEntityId) {
+      return layoutLocalSectors(graph.nodes, graph.edges, relatedEntityId);
+    }
+    return layoutMode === "concentric"
+      ? layoutGlobalConcentric(graph.nodes, graph.edges)
+      : layoutTypeClusters(graph.nodes, graph.edges);
+  }, [graph.nodes, graph.edges, layoutMode, relatedEntityId]);
+  const WIDTH = Math.max(1400, Math.ceil(Math.sqrt(graph.nodes.length)) * 500);
+  const HEIGHT = WIDTH;
+  const initialNodes = calculatedLayout.nodes;
   const viewScale = Math.min(viewport.width / WIDTH, viewport.height / HEIGHT);
   const { zoom } = camera;
   const worldScale = viewScale * zoom;
+  const nodeScale = worldScale;
+  const labelScale = worldScale;
   const defaultCenter = useMemo(() => ({ x: WIDTH / 2, y: HEIGHT / 2 }), [WIDTH, HEIGHT]);
   const center = camera.center ?? defaultCenter;
   const viewLeft = worldScale ? center.x - viewport.width / (2 * worldScale) : 0;
@@ -148,8 +172,12 @@ export default function GraphView({
   }, []);
 
   const baseNodes = useMemo(
-    () => initialNodes.map((node) => ({ ...node, ...positions[node.id] })),
-    [initialNodes, positions],
+    () => initialNodes.map((node) => ({
+      ...node,
+      ...positions[node.id],
+      ...layoutAnimation[node.id],
+    })),
+    [initialNodes, layoutAnimation, positions],
   );
 
   const nodes = useMemo(
@@ -181,7 +209,15 @@ export default function GraphView({
           item,
         ): item is typeof item & { source: GraphNode; target: GraphNode } =>
           Boolean(item.source && item.target),
-      );
+      )
+      .map((item, _index, items) => {
+        const { source, target, edge } = item;
+        const siblings = items.filter((candidate) =>
+          (candidate.edge.source_id === edge.source_id && candidate.edge.target_id === edge.target_id) ||
+          (candidate.edge.source_id === edge.target_id && candidate.edge.target_id === edge.source_id),
+        );
+        return { ...item, ...edgeGeometry(source, target, siblings.indexOf(item), siblings.length) };
+      });
   }, [graph.edges, nodes]);
   const localDistances = useMemo(
     () => relatedEntityId ? graphDistances(graph.edges, relatedEntityId) : null,
@@ -236,10 +272,65 @@ export default function GraphView({
   const baseNodesRef = useRef(baseNodes);
   baseNodesRef.current = baseNodes;
 
+  useLayoutEffect(() => {
+    window.cancelAnimationFrame(layoutAnimationFrame.current);
+    const targets = initialNodes.map((node) => ({ ...node, ...positions[node.id] }));
+    if (!hasRenderedLayout.current) {
+      hasRenderedLayout.current = true;
+      displayedLayout.current = Object.fromEntries(targets.map(({ id, x, y }) => [id, { x, y }]));
+      return;
+    }
+    const target = Object.fromEntries(targets.map(({ id, x, y }) => [id, { x, y }])) as Record<string, Point>;
+    const start = Object.fromEntries(targets.map(({ id, x, y }) => [
+      id,
+      displayedLayout.current[id] ?? { x, y },
+    ])) as Record<string, Point>;
+    setLayoutAnimation(start);
+    if (!motionEnabled) {
+      displayedLayout.current = target;
+      setLayoutAnimation({});
+      return;
+    }
+    const startedAt = performance.now();
+    const move = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 520);
+      const eased = progress < 0.5
+        ? 4 * progress ** 3
+        : 1 - (-2 * progress + 2) ** 3 / 2;
+      const frame = Object.fromEntries(targets.map(({ id }) => {
+        const from = start[id] ?? target[id];
+        const to = target[id];
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const direction = Number.parseInt(id.slice(-2), 16) % 2 ? 1 : -1;
+        const bend = Math.hypot(dx, dy) * 0.14 * direction;
+        const controlX = (from.x + to.x) / 2 - (dy / (Math.hypot(dx, dy) || 1)) * bend;
+        const controlY = (from.y + to.y) / 2 + (dx / (Math.hypot(dx, dy) || 1)) * bend;
+        const remaining = 1 - eased;
+        return [id, {
+          x: remaining ** 2 * from.x + 2 * remaining * eased * controlX + eased ** 2 * to.x,
+          y: remaining ** 2 * from.y + 2 * remaining * eased * controlY + eased ** 2 * to.y,
+        }];
+      })) as Record<string, Point>;
+      displayedLayout.current = frame;
+      setLayoutAnimation(frame);
+      if (progress < 1) {
+        layoutAnimationFrame.current = window.requestAnimationFrame(move);
+      } else {
+        displayedLayout.current = target;
+        setLayoutAnimation({});
+      }
+    };
+    layoutAnimationFrame.current = window.requestAnimationFrame(move);
+    return () => window.cancelAnimationFrame(layoutAnimationFrame.current);
+  }, [initialNodes, layoutMode, motionEnabled, relatedEntityId]);
+
   const entityColors = useMemo(
     () => new Map(entities.map((entity) => [entity.id, entity.color])),
     [entities],
   );
+  const degrees = useMemo(() => degreeById(graph.nodes, graph.edges), [graph.nodes, graph.edges]);
+  const [hoveredNodeId, setHoveredNodeId] = useState("");
 
   useEffect(
     () => () => {
@@ -542,8 +633,8 @@ export default function GraphView({
     });
   };
 
-  const fitScope = useMemo(() => JSON.stringify([relatedEntityId, [...visibleNodeIds].sort()]),
-    [relatedEntityId, visibleNodeIds]);
+  const fitScope = useMemo(() => JSON.stringify([layoutMode, relatedEntityId, [...visibleNodeIds].sort()]),
+    [layoutMode, relatedEntityId, visibleNodeIds]);
   const lastFitScope = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (!viewScale || lastFitScope.current === fitScope) return;
@@ -568,6 +659,16 @@ export default function GraphView({
   const title = relatedEntityId
     ? `${centerEntity?.name ?? t("词条")} · ${t("局部图谱")}`
     : t("关系网");
+  const spotlightId = hoveredNodeId || centeredNodeId;
+  const spotlightNeighbors = useMemo(() => {
+    if (!spotlightId) return new Set<string>();
+    const result = new Set([spotlightId]);
+    for (const edge of graph.edges) {
+      if (edge.source_id === spotlightId) result.add(edge.target_id);
+      if (edge.target_id === spotlightId) result.add(edge.source_id);
+    }
+    return result;
+  }, [graph.edges, spotlightId]);
 
   const changeFilters = (ids: string[]) => {
     resetFocus();
@@ -701,6 +802,26 @@ export default function GraphView({
             )}
           </div>
 
+          <div className="graph-layout-toggle graph-tool-group" role="group" aria-label={t("布局")}
+            title={t(relatedEntityId ? "同心圆布局" : "类型聚类布局")}>
+            <button type="button" className={`graph-control graph-layout-button${layoutMode === "cluster" ? " selected" : ""}`}
+              aria-pressed={layoutMode === "cluster"}
+              onClick={() => {
+                setPositions({});
+                setLayoutPreference({ centerId: relatedEntityId, mode: "cluster" });
+              }}>
+              {t("聚类")}
+            </button>
+            <button type="button" className={`graph-control graph-layout-button${layoutMode === "concentric" ? " selected" : ""}`}
+              aria-pressed={layoutMode === "concentric"}
+              onClick={() => {
+                setPositions({});
+                setLayoutPreference({ centerId: relatedEntityId, mode: "concentric" });
+              }}>
+              {t("同心")}
+            </button>
+          </div>
+
           {relatedEntityId && (
             <div className="graph-local-controls graph-tool-group">
               <label className="graph-hop-label" htmlFor={hopInputId}>{t("跳数")}</label>
@@ -806,8 +927,8 @@ export default function GraphView({
                   {visibleGraph.nodes.map((node) => (
                     <g key={node.id} transform={`translate(${node.x * WIDTH} ${node.y * HEIGHT})`}>
                       <ellipse
-                        rx={nodeRadius(node.name)}
-                        ry={NODE_HALF_HEIGHT}
+                        rx={nodeRadius(node.name) * (1 + Math.min(0.12, (degrees.get(node.id) ?? 0) * 0.018)) * nodeScale / worldScale}
+                        ry={NODE_HALF_HEIGHT * nodeScale / worldScale}
                         fill="black"
                       />
                     </g>
@@ -816,29 +937,30 @@ export default function GraphView({
               </defs>
               <g mask={`url(#${lineMaskId})`}>
                 <AnimatePresence initial={false}>
-                  {visibleGraph.edges.map(({ edge, source, target }) => (
+                  {visibleGraph.edges.map((item) => {
+                    const { edge, source, target } = item;
+                    return (
                     <motion.g
                       key={edge.id}
                       className="graph-edge"
                       initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                      animate={{ opacity: spotlightId && edge.source_id !== spotlightId && edge.target_id !== spotlightId ? 0.12 : 1 }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.17 }}
                     >
-                      <line
-                        x1={source.x * WIDTH}
-                        y1={source.y * HEIGHT}
-                        x2={target.x * WIDTH}
-                        y2={target.y * HEIGHT}
+                      <path
+                        d={`M ${source.x * WIDTH} ${source.y * HEIGHT} Q ${item.controlX * WIDTH} ${item.controlY * HEIGHT} ${target.x * WIDTH} ${target.y * HEIGHT}`}
                       />
                       <text
-                        x={((source.x + target.x) * WIDTH) / 2}
-                        y={((source.y + target.y) * HEIGHT) / 2 - 7}
+                        x={(source.x * 0.25 + item.controlX * 0.5 + target.x * 0.25) * WIDTH}
+                        y={(source.y * 0.25 + item.controlY * 0.5 + target.y * 0.25) * HEIGHT - 7}
+                        className={(!relatedEntityId && zoom < 1.1 && !spotlightId) ? "is-hidden" : ""}
                       >
                         {edge.label}
                       </text>
                     </motion.g>
-                  ))}
+                    );
+                  })}
                 </AnimatePresence>
               </g>
             </g>
@@ -854,18 +976,29 @@ export default function GraphView({
                   type="button"
                   className="graph-node graph-node-glass"
                   data-node-id={node.id}
-                  {...glassFade}
+                  initial={{ ...glassFade.initial, scale: 0, opacity: 0 }}
+                  animate={{
+                    ...glassFade.animate,
+                    scale: 1,
+                    opacity: spotlightId && !spotlightNeighbors.has(node.id) ? 0.15 : 1,
+                  }}
+                  exit={{ ...glassFade.exit, scale: 0, opacity: 0 }}
                   whileHover={motionEnabled ? { scale: HOVER_SCALE } : undefined}
-                  transition={{ duration: 0.17 }}
+                  transition={{
+                    scale: { type: "spring", stiffness: 320, damping: 28 },
+                    opacity: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                    "--glass-strength": { duration: 0.2 },
+                  }}
                   aria-label={t("{name}，单击居中，双击查看局部图谱").replace("{name}", () => node.name)}
                   aria-pressed={node.id === centeredNodeId}
                   style={{
                     "--node-color": entityColors.get(node.id) ?? node.color,
-                    "--graph-scale": worldScale,
-                    left: (node.x * WIDTH - viewLeft - nodeRadius(node.name)) * worldScale,
-                    top: (node.y * HEIGHT - viewTop - NODE_HALF_HEIGHT) * worldScale,
-                    width: 2 * nodeRadius(node.name) * worldScale,
-                    height: 2 * NODE_HALF_HEIGHT * worldScale,
+                    "--graph-scale": labelScale,
+                    "--degree-scale": 1 + Math.min(0.12, (degrees.get(node.id) ?? 0) * 0.018),
+                    left: (node.x * WIDTH - viewLeft) * worldScale - nodeRadius(node.name) * (1 + Math.min(0.12, (degrees.get(node.id) ?? 0) * 0.018)) * nodeScale,
+                    top: (node.y * HEIGHT - viewTop) * worldScale - NODE_HALF_HEIGHT * nodeScale,
+                    width: 2 * nodeRadius(node.name) * (1 + Math.min(0.12, (degrees.get(node.id) ?? 0) * 0.018)) * nodeScale,
+                    height: 2 * NODE_HALF_HEIGHT * nodeScale,
                   } as CSSProperties}
                   onPointerDown={(event) => {
                     cameraAnimation.current?.stop();
@@ -882,6 +1015,8 @@ export default function GraphView({
                     event.currentTarget.setPointerCapture(event.pointerId);
                   }}
                   onClick={() => handleNodeClick(node)}
+                  onMouseEnter={() => setHoveredNodeId(node.id)}
+                  onMouseLeave={() => setHoveredNodeId("")}
                   onDoubleClick={() => openNode(node.id)}
                   onContextMenu={(event) => openNodeMenu(event, node)}
                   onKeyDown={(event) => {

@@ -1,6 +1,8 @@
 import { useActionDialog } from "./ActionDialog";
 import { AnimatePresence, motion } from "framer-motion";
 import Dropdown from "./Dropdown";
+import { TimelineEraPreferences, TimelineModeControl } from "./TimelineModeControl";
+import type { TimelineMode } from "./timelinePreferences";
 import { glassFade, glassSlide } from "./glassMotion";
 import {
   ChevronDown,
@@ -72,6 +74,8 @@ export default function SettingsView({
   onError,
   particlesEnabled,
   transitionsEnabled,
+  timelineMode,
+  onTimelineModeChange,
   onParticlesChange,
   onTransitionsChange,
 }: {
@@ -86,6 +90,8 @@ export default function SettingsView({
   onError: (message: string) => void;
   particlesEnabled: boolean;
   transitionsEnabled: boolean;
+  timelineMode: TimelineMode;
+  onTimelineModeChange: (mode: TimelineMode) => void;
   onParticlesChange: (enabled: boolean) => void;
   onTransitionsChange: (enabled: boolean) => void;
 }) {
@@ -546,6 +552,12 @@ export default function SettingsView({
                 {translate(language, "保存")}
               </button>
             </div>
+          </section>
+          <section className="settings-section timeline-display-settings">
+            <div className="settings-section-title"><h2>{translate(language, "时间线默认展示方案")}</h2></div>
+            <TimelineModeControl mode={timelineMode} onChange={onTimelineModeChange} language={language}
+              label={translate(language, "时间线默认展示方案")} />
+            <TimelineEraPreferences path={project.path} language={language} />
           </section>
           <section className="settings-section visual-settings">
             <div className="settings-section-title"><h2>{translate(language, "视觉动效与性能")}</h2></div>
