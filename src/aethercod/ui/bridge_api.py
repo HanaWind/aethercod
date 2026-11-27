@@ -25,7 +25,8 @@ from .app_identity import set_webview_window_corners
 _T = TypeVar("_T")
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 _RETIRED_TEMPLATE_FIELDS = {
-    "polity": {"正式名称", "定位/身份", "核心特征"},
+    "person": {"性别/代词", "定位/身份", "核心特征"},
+    "polity": {"正式名称", "定位/身份", "核心特征", "文化与经济", "地理概述"},
     "place": {
         "正式名称",
         "定位/身份",

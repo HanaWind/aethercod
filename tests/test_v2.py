@@ -40,6 +40,14 @@ def test_polity_and_place_templates_exclude_generic_fields():
     assert category[2] is True
 
 
+def test_person_and_polity_templates_match_editor_order(project):
+    _, service = project
+    person_names = [field.name for field in service.fields.list("person")]
+    polity_names = [field.name for field in service.fields.list("polity")]
+    assert set(person_names) == {"英文名", "中文名", "身份", "本源", "种族", "能力", "称号"}
+    assert set(polity_names) == {"英文名", "中文名", "制度", "面积", "人口", "经济"}
+
+
 def test_v3_database_migrates_favorite_and_graph_layout_without_losing_place_rows(tmp_path):
     path = tmp_path / "v3-library.aethercod"
     legacy = sqlite3.connect(path)

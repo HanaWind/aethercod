@@ -1,5 +1,5 @@
 import { Columns2, List, Plus, ScatterChart, X } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { translate, type Language } from "./i18n";
 import { parseTimelineYear, readTimelineEras, timelineModes, writeTimelineEras, type TimelineMode } from "./timelinePreferences";
 
@@ -11,13 +11,38 @@ export function TimelineModeControl({ mode, onChange, language, label }: {
   language: Language;
   label: string;
 }) {
+  const root = useRef<HTMLDivElement>(null);
+  const items = useRef(new Map<string, HTMLButtonElement>());
+  const [pill, setPill] = useState({ x: 0, width: 0, ready: false });
+
+  useLayoutEffect(() => {
+    const element = items.current.get(mode);
+    const container = root.current;
+    if (!element || !container) return;
+    const measure = () => setPill({
+      x: element.offsetLeft,
+      width: element.offsetWidth,
+      ready: true,
+    });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    for (const button of items.current.values()) observer.observe(button);
+    return () => observer.disconnect();
+  }, [language, mode]);
+
   return (
-    <div className="timeline-mode-control" role="group" aria-label={label}>
+    <div ref={root} className="timeline-mode-control" role="group" aria-label={label}>
+      <span className="timeline-mode-pill" aria-hidden="true"
+        style={{ transform: `translateX(${pill.x}px)`, width: pill.width, opacity: pill.ready ? 1 : 0 }} />
       {timelineModes.map(({ value, label: name }) => {
         const Icon = icons[value];
         const title = translate(language, name);
         return (
-          <button key={value} type="button" aria-pressed={mode === value} aria-label={title}
+          <button ref={(element) => {
+            if (element) items.current.set(value, element);
+            else items.current.delete(value);
+          }} key={value} type="button" aria-pressed={mode === value} aria-label={title}
             title={title} onClick={() => onChange(value)}>
             <Icon size={14} aria-hidden="true" />
             <span>{title}</span>

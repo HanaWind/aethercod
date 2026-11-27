@@ -21,14 +21,17 @@ BUILTIN_FIELD_NAMESPACE = uuid.UUID("caec4156-148d-4339-8f42-8a81113d85a9")
 PLACE_CATEGORIES = ("大陆", "国家辖区", "行省", "城市", "村镇", "遗迹", "自然地貌", "其他")
 BUILTIN_FIELDS = {
     "person": [
-        ("中文名", "text", False, []),
         ("英文名", "text", False, []),
-        ("称号", "text", False, []),
-        ("性别/代词", "text", False, []),
+        ("中文名", "text", False, []),
+        ("身份", "text", False, []),
+        ("本源", "text", False, []),
         ("种族", "text", False, []),
+        ("能力", "textarea", False, []),
+        ("称号", "text", False, []),
     ],
     "polity": [
         ("英文名", "text", False, []),
+        ("中文名", "text", False, []),
         (
             "制度",
             "choice",
@@ -37,8 +40,7 @@ BUILTIN_FIELDS = {
         ),
         ("面积", "text", False, []),
         ("人口", "integer", False, []),
-        ("文化与经济", "textarea", False, []),
-        ("地理概述", "textarea", False, []),
+        ("经济", "textarea", False, []),
     ],
     "place": [
         ("英文名", "text", False, []),
@@ -92,7 +94,7 @@ COMMON_FIELDS = [
     ("核心特征", "textarea", False, []),
 ]
 for _type_id in tuple(BUILTIN_FIELDS):
-    if _type_id in {"polity", "place"}:
+    if _type_id in {"person", "polity", "place"}:
         continue
     _existing_names = {item[0] for item in BUILTIN_FIELDS[_type_id]}
     BUILTIN_FIELDS[_type_id].extend(
@@ -303,7 +305,11 @@ def initialize(conn: sqlite3.Connection) -> None:
 def is_builtin_field(field_id: str, type_id: str, name: str) -> bool:
     # Legacy templates used random IDs. Protect these by their template name,
     # and protect stable IDs even when their display name has been edited.
-    return any(
+    legacy_templates = {
+        "person": {"性别/代词", "称号", "种族", "定位/身份", "核心特征"},
+        "polity": {"文化与经济", "地理概述", "定位/身份", "核心特征"},
+    }
+    return name in legacy_templates.get(type_id, set()) or any(
         name == definition[0]
         or field_id == uuid.uuid5(BUILTIN_FIELD_NAMESPACE, f"{type_id}:{definition[0]}").hex
         for definition in BUILTIN_FIELDS.get(type_id, [])

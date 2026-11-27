@@ -1,7 +1,8 @@
 import type { Entity } from "./api";
 
-const polityFields = ["英文名", "制度", "面积", "人口", "文化与经济", "地理概述"];
-const placeBaseFields = ["英文名", "地点类别"];
+const personFields = ["身份", "本源", "种族", "能力", "称号"];
+const polityFields = ["制度", "面积", "人口", "经济"];
+const placeBaseFields = ["地点类别"];
 const administrativeFields = ["人口", "经济", "地区特色"];
 const placeFields = new Map([
   ["大陆", administrativeFields],
@@ -26,10 +27,18 @@ const legacyFields = new Set([
 ]);
 
 export function propertyLayout(entity: Entity) {
-  const fields = entity.fields ?? [];
-  const aliasesInGrid = entity.type_id === "polity" || entity.type_id === "place";
-  if (!aliasesInGrid) return { fields, additional: [], aliasesInGrid };
-
+  const fields = (entity.fields ?? []).filter((field) => field.name !== "英文名" && field.name !== "中文名");
+  if (entity.type_id === "person" || entity.type_id === "polity") {
+    const sourceOrder = entity.type_id === "person" ? personFields : polityFields;
+    const definitions = new Map(fields.map((field) => [field.name, field]));
+    return {
+      fields: sourceOrder.flatMap((name) => {
+        const field = definitions.get(name);
+        return field ? [field] : [];
+      }),
+      additional: [],
+    };
+  }
   const isPlace = entity.type_id === "place";
   const category = entity.custom_fields["地点类别"];
   const categoryFields = typeof category === "string" ? placeFields.get(category) : undefined;
@@ -37,7 +46,6 @@ export function propertyLayout(entity: Entity) {
   const template = isPlace ? placeTemplate : polityTemplate;
   const definitions = new Map(fields.map((field) => [field.name, field]));
   return {
-    aliasesInGrid,
     fields: order.flatMap((name) => {
       const field = definitions.get(name);
       return field ? [field] : [];

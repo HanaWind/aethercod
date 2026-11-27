@@ -6,6 +6,7 @@
 }
 .timeline-header-actions { flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .timeline-mode-control {
+  position: relative;
   width: fit-content;
   padding: 3px;
   gap: 2px;
@@ -13,7 +14,23 @@
   border-radius: 9px;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
 }
+.timeline-mode-pill {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 30%, transparent);
+  transition: transform 240ms cubic-bezier(.22, 1, .36, 1), width 240ms cubic-bezier(.22, 1, .36, 1), opacity 100ms ease;
+  pointer-events: none;
+}
+.theme-dark .timeline-mode-pill { box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 0 10px color-mix(in srgb, var(--accent) 16%, transparent); }
 .timeline-mode-control button {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   min-height: 28px;
   align-items: center;
@@ -26,11 +43,11 @@
   white-space: nowrap;
   font-size: 11px;
 }
-.timeline-mode-control button:hover { color: var(--text); background: var(--line); }
+.timeline-mode-control button:hover { color: var(--text); background: transparent; }
 .timeline-mode-control button[aria-pressed="true"] {
   color: var(--text);
-  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: transparent;
+  border-color: transparent;
 }
 .timeline-display-settings .settings-section-title { margin-bottom: 12px; }
 .timeline-era-preferences { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); }
@@ -84,6 +101,11 @@
   background: var(--timeline-color);
 }
 .timeline-card-list { column-gap: 14px; row-gap: 6px; }
+.app-shell:not(.motion-disabled) .timeline-track:has(.timeline-card-list:hover) .timeline-card-list:not(:hover) { opacity: .35; }
+.timeline-card-list { transition: transform 180ms cubic-bezier(.22, 1, .36, 1), opacity 180ms ease, border-color 180ms ease, box-shadow 180ms ease; }
+.app-shell:not(.motion-disabled) .timeline-card-list:hover { z-index: 2; transform: translateY(-3px) scale(1.02); border-color: color-mix(in srgb, var(--timeline-color) 52%, var(--line-strong)); box-shadow: 0 0 16px color-mix(in srgb, var(--timeline-color) 19%, transparent); }
+.app-shell:not(.motion-disabled) .timeline-card-list:has(.timeline-card-details:active) { transform: translateY(-1px) scale(.985); transition-duration: 80ms; }
+.timeline-card-list .timeline-entry-chip:is(:hover, :focus-visible) { border-color: var(--timeline-color); background: color-mix(in srgb, var(--timeline-color) 22%, var(--panel)); box-shadow: 0 0 12px color-mix(in srgb, var(--timeline-color) 45%, transparent); }
 .timeline-card-list .timeline-card-entries { grid-column: 2; }
 .timeline-card-list .timeline-card-chevron { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
 .timeline-card-list .timeline-card-date { grid-row: 1 / span 2; }
@@ -482,6 +504,9 @@
 }
 .timeline-scatter-tooltip strong { color: var(--text); }
 .motion-disabled .timeline-scatter-dot::before { transition: none; }
+.motion-disabled .timeline-mode-pill { transition: none; }
+.motion-disabled .timeline-card-list { transition: none; }
+.motion-disabled .timeline-card-list:hover { transform: none; }
 
 .timeline-page { container-type: inline-size; }
 @container (max-width: 780px) {

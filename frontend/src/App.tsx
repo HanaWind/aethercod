@@ -656,6 +656,27 @@ function Workspace({
     );
   };
 
+  const removeFavorite = async (entityId: string) => {
+    const api = desktopApi();
+    if (!api || !state.writable || (draft?.id === entityId && !(await flushDraft()))) return;
+    try {
+      const entity = await api.get_entity(entityId);
+      if (!entity) return;
+      await api.save_entity({ ...entity, is_favorite: false });
+      setState((current) => ({
+        ...current,
+        entities: current.entities.map((item) => item.id === entityId ? { ...item, is_favorite: false } : item),
+      }));
+      if (draft?.id === entityId) {
+        updateDraft((current) => ({ ...current, is_favorite: false }));
+        pendingDrafts.current.delete(entityId);
+      }
+      showStatusToast(translate(language, "已移出收藏夹"), "success");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   const exportJson = async () => {
     try {
       await desktopApi()?.export_json();
@@ -846,16 +867,22 @@ function Workspace({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (closeInProgress.current || event.defaultPrevented) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      const usesShortcut = event.ctrlKey || event.metaKey;
+      const shortcut = event.key.toLowerCase();
+      if (usesShortcut && ["k", "s", "d"].includes(shortcut) && !state.project) {
+        event.preventDefault();
+        return;
+      }
+      if (usesShortcut && shortcut === "k") {
         event.preventDefault();
         setPaletteOpen(true);
         setPaletteQuery("");
         setPaletteIndex(0);
         setPaletteNoMatch(false);
-      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      } else if (usesShortcut && shortcut === "s") {
         event.preventDefault();
         void manualSave();
-      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+      } else if (usesShortcut && shortcut === "d") {
         if (activeView !== "entries" || !draft) return;
         event.preventDefault();
         toggleFavorite();
@@ -868,7 +895,7 @@ function Workspace({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeView, draft, manualSave, toggleFavorite]);
+  }, [activeView, draft, manualSave, state.project, toggleFavorite]);
 
   useEffect(() => {
     if (paletteOpen) window.setTimeout(() => paletteInput.current?.focus(), 40);
@@ -1177,9 +1204,6 @@ function Workspace({
       }
     />
   );
-  const updateAliases = (aliases: string[]) =>
-    updateDraft((current) => ({ ...current, aliases }));
-
   return (
     <div
       className={`app-shell theme-${theme}${motionEnabled ? "" : " motion-disabled"}${windowMaximized ? " window-maximized" : ""}`}
@@ -1828,21 +1852,46 @@ function Workspace({
                     {state.entities.filter((entity) => entity.is_favorite).length}
                   </span>
                 </header>
-                <div className="favorites-list">
+                <div className="favorites-list" data-motion={motionEnabled}>
                   {state.entities.filter((entity) => entity.is_favorite).map((entity) => (
-                    <button
-                      className="favorite-row"
+                    <article
+                      className="favorite-card"
                       key={entity.id}
-                      onClick={() => void selectEntity(entity)}
+                      style={{ "--favorite-color": entity.color } as React.CSSProperties}
+                      onMouseMove={(event) => {
+                        if (!motionEnabled) return;
+                        const bounds = event.currentTarget.getBoundingClientRect();
+                        const nx = Math.max(-1, Math.min(1, 2 * (event.clientX - bounds.left) / bounds.width - 1));
+                        const ny = Math.max(-1, Math.min(1, 2 * (event.clientY - bounds.top) / bounds.height - 1));
+                        event.currentTarget.style.setProperty("--favorite-tilt-x", String(-ny * 4) + "deg");
+                        event.currentTarget.style.setProperty("--favorite-tilt-y", String(nx * 4) + "deg");
+                        event.currentTarget.style.setProperty("--favorite-glare-x", String((nx + 1) * 50) + "%");
+                        event.currentTarget.style.setProperty("--favorite-glare-y", String((ny + 1) * 50) + "%");
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.removeProperty("--favorite-tilt-x");
+                        event.currentTarget.style.removeProperty("--favorite-tilt-y");
+                      }}
                     >
-                      <span className="entity-dot" style={{ background: entity.color, "--node-color": entity.color } as React.CSSProperties} />
-                      <span className="favorite-row-copy">
+                      <span className="favorite-card-glare" aria-hidden="true" />
+                      <header className="favorite-card-header">
+                        <span className="favorite-type-badge">
+                          <span className="entity-dot" style={{ background: entity.color }} />
+                          {typeById(entity.type_id) ? displayTypeName(language, typeById(entity.type_id)!) : translate(language, "词条")}
+                        </span>
+                        <button type="button" className="favorite-card-remove icon-button compact"
+                          title={translate(language, "移出收藏夹")} aria-label={translate(language, "移出收藏夹")}
+                          disabled={!state.writable}
+                          onClick={(event) => { event.stopPropagation(); void removeFavorite(entity.id); }}>
+                          <Star size={15} fill="currentColor" />
+                        </button>
+                      </header>
+                      <button type="button" className="favorite-card-open" onClick={() => void selectEntity(entity)}>
                         <strong>{entity.name}</strong>
-                        <small>{entity.summary || (typeById(entity.type_id) ? displayTypeName(language, typeById(entity.type_id)!) : "")}</small>
-                      </span>
-                      <Star size={15} fill="currentColor" />
-                      <ChevronRight size={14} />
-                    </button>
+                        {entity.summary && <span>{entity.summary}</span>}
+                        <ChevronRight size={15} />
+                      </button>
+                    </article>
                   ))}
                 </div>
                 {!state.entities.some((entity) => entity.is_favorite) && (
@@ -1994,7 +2043,7 @@ function Workspace({
                       language={language}
                       kind="summary"
                       value={draft.summary}
-                      placeholder={translate(language, "添加词条摘要")}
+                      placeholder={translate(language, "添加别名、称号或简短介绍")}
                       disabled={!state.writable}
                       onChange={(value) =>
                         updateDraft((current) => ({
@@ -2006,13 +2055,7 @@ function Workspace({
 
                     <div className="doc-divider" />
 
-                    {!properties?.aliasesInGrid && (
-                      <label className="metadata-line">
-                        <span>{translate(language, "别名")}</span>
-                        <AliasInput aliases={draft.aliases} disabled={!state.writable} language={language} onChange={updateAliases} />
-                      </label>
-                    )}
-                    {properties && (properties.aliasesInGrid || properties.fields.length > 0) && (
+                    {properties && (properties.fields.length > 0 || properties.additional.length > 0) && (
                       <section className="document-section properties-section">
                         <div className="section-heading">
                           <div>
@@ -2040,12 +2083,6 @@ function Workspace({
                                 damping: 36,
                               }}
                             >
-                              {properties.aliasesInGrid && (
-                                <label className="property-cell">
-                                  <span>{translate(language, "别名")}</span>
-                                  <AliasInput aliases={draft.aliases} disabled={!state.writable} language={language} onChange={updateAliases} />
-                                </label>
-                              )}
                               {properties.fields.map(renderProperty)}
                               {properties.additional.length > 0 && (
                                 <details className="additional-properties">
@@ -2330,17 +2367,20 @@ function Workspace({
                           )}
                         </div>
                         {state.writable && (
-                          <div className="date-entry">
-                            <input
-                              value={newDate.label}
-                              onChange={(event) =>
-                                setNewDate((value) => ({
-                                  ...value,
-                                  label: event.target.value,
-                                }))
-                              }
-                              placeholder={translate(language, "节点名称")}
-                            />
+                          <div className="date-entry timeline-date-edit-grid">
+                            <div className="timeline-new-date-heading">
+                              <input
+                                value={newDate.label}
+                                aria-label={translate(language, "节点名称")}
+                                onChange={(event) =>
+                                  setNewDate((value) => ({
+                                    ...value,
+                                    label: event.target.value,
+                                  }))
+                                }
+                                placeholder={translate(language, "节点名称")}
+                              />
+                            </div>
                             <DatePrecisionEditor
                               value={{
                                 year: newDate.year ? Number(newDate.year) : null,
@@ -2360,7 +2400,7 @@ function Workspace({
                               }
                             />
                             <textarea
-                              className="new-date-description"
+                              className="new-date-description timeline-new-date-description"
                               aria-label={translate(language, "事件具体说明")}
                               value={newDate.description}
                               onChange={(event) =>
@@ -2372,13 +2412,10 @@ function Workspace({
                               placeholder={translate(language, "事件具体说明")}
                               rows={2}
                             />
-                            <button
-                              className="icon-button compact"
-                              title={translate(language, "添加时间节点")}
-                              disabled={!state.writable}
-                              onClick={addDate}
-                            >
+                            <button type="button" className="timeline-add-date-button"
+                              disabled={!state.writable || !newDate.year} onClick={addDate}>
                               <Plus size={14} />
+                              {translate(language, "添加时间节点")}
                             </button>
                           </div>
                         )}
@@ -2700,13 +2737,25 @@ function Workspace({
         {paletteOpen && (
           <motion.div
             className="modal-scrim"
-            {...glassFade}
+            initial={{ ...glassFade.initial, opacity: 0 }}
+            animate={{ ...glassFade.animate, opacity: 1 }}
+            exit={{ ...glassFade.exit, opacity: 0 }}
+            transition={{ duration: 0.05, ease: [0.22, 1, 0.36, 1] }}
             onMouseDown={() => setPaletteOpen(false)}
           >
             <motion.div
               className="command-palette"
               {...glassSlide(8)}
-              transition={{ type: "spring", stiffness: 420, damping: 34 }}
+              exit={{
+                ...glassFade.exit,
+                opacity: 0,
+                scale: 0.985,
+                borderColor: "transparent",
+                boxShadow: "none",
+                marginTop: 0,
+                marginBottom: 0,
+              }}
+              transition={{ duration: 0.05, ease: [0.22, 1, 0.36, 1] }}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="palette-search">
@@ -2997,34 +3046,6 @@ function Workspace({
         )}
       </AnimatePresence>
     </div>
-  );
-}
-
-function AliasInput({
-  aliases,
-  disabled,
-  language,
-  onChange,
-}: {
-  aliases: string[];
-  disabled: boolean;
-  language: Language;
-  onChange: (aliases: string[]) => void;
-}) {
-  const [input, setInput] = useState<string | null>(null);
-  return (
-    <input
-      className="inline-input"
-      value={input ?? aliases.join("，")}
-      placeholder={translate(language, "添加别名")}
-      disabled={disabled}
-      onBlur={() => setInput(null)}
-      onChange={(event) => {
-        const text = event.target.value;
-        setInput(text);
-        onChange(text.split(/[，,]/).map((alias) => alias.trim()).filter(Boolean));
-      }}
-    />
   );
 }
 
